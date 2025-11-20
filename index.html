@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WatchVIM CMS Portal</title>
+
+  <!-- Tailwind CDN (static deploy friendly) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            watchBlack: "#0a0a0a",
+            watchRed: "#e50914",
+            watchGold: "#d4af37"
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    html, body { background:#0a0a0a; color:#fff; }
+    .active-link { background:#e50914 !important; color:white !important; }
+    .input {
+      width:100%; background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.1);
+      border-radius:12px; padding:.55rem .75rem;
+      outline:none;
+    }
+    .input:focus { box-shadow:0 0 0 2px #d4af37; }
+    .textarea { min-height:120px; }
+    .card {
+      background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.1);
+      border-radius:16px;
+    }
+    .btn {
+      padding:.55rem 1rem; border-radius:12px; font-weight:600;
+      transition:.15s; transform:translateZ(0);
+    }
+    .btn:active { transform:scale(.98); }
+    .btn-primary { background:#e50914; }
+    .btn-primary:hover { background:#f0141f; }
+    .btn-ghost { background:rgba(255,255,255,0.08); }
+    .btn-ghost:hover { background:rgba(255,255,255,0.14); }
+    .btn-danger { background:#b91c1c; }
+    .btn-danger:hover { background:#dc2626; }
+    .badge {
+      font-size:11px; padding:2px 8px; border-radius:999px;
+      background:rgba(212,175,55,0.15); color:#d4af37;
+      border:1px solid rgba(212,175,55,0.3);
+    }
+  </style>
+</head>
+
+<body class="min-h-screen">
+  <div id="root" class="min-h-screen"></div>
+
+<script>
+/* ==========================================================
+   WatchVIM CMS — Single-file SPA + Role Login + API-ready
+========================================================== */
+
+/* -------------- CONFIG (API-ready toggle) --------------- */
+const CONFIG = {
+  useBackend: false,         // set true later when API is live
+  apiBaseUrl: "https://api.watchvim.com/cms" // placeholder
+};
+
+/* ----------------------------- Storage keys ------------------------------ */
+const KEYS = {
+  content: "watchvim_cms_content",
+  users:   "watchvim_cms_users",
+  ads:     "watchvim_cms_ads",
+  loop:    "watchvim_cms_loop",
+  session: "watchvim_cms_session"
+};
+
+/* ----------------------------- Helpers ------------------------------ */
+const $ = (sel) => document.querySelector(sel);
+const nowIso = () => new Date().toISOString();
+const uuid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+const cap = (s)=> (s||"").charAt(0).toUpperCase() + (s||"").slice(1);
+
+function safeParse(raw, fallback){
+  try { return raw ? JSON.parse(raw) : fallback; }
+  catch { return fallback; }
+}
+
+function escapeHtml(str=""){
+  return str.replace(/[&<>"']/g, m => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[m]));
+}
+
+function val(v){ return v==null ? "" : String(v); }
+function numOrUndef(v){ const n = Number(v); return Number.isFinite(n) && v!=="" ? n : undefined; }
+function label(t){ return `<label class="text-sm text-white/70">${t}</label>`; }
+
+/* ----------------------------- Seed data ------------------------------ */
+function seedContent(){
+  const now = nowIso();
+  return [{
+    id:"seed-film-1",
+    type:"films",
+    title:"Nice Enough",
+    synopsis:"A gripping thriller debuting on WatchVIM.",
+    genre:["Thriller"],
+    runtimeMins:102,
+    releaseYear:2025,
+    monetization:"ad_supported",
+    isPublished:true,
+    createdAt:now,
+    updatedAt:now
+  }];
+}
+
+function seedUsers(){
+  const now = nowIso();
+  return [
+    {
+      id:"seed-admin",
+      name:"Anthony Bawn",
+      email:"admin@watchvim.com",
+      password:"watchvimadmin",   // demo only
+      role:"admin",
+      isActive:true,
+      createdAt:now
+    },
+    {
+      id:"seed-editor",
+      name:"WatchVIM Editor",
+      email:"editor@watchvim.com",
+      password:"watchvimeditor",
+      role:"editor",
+      isActive:true,
+      createdAt:now
+    },
+    {
+      id:"seed-viewer",
+      name:"WatchVIM Viewer",
+      email:"viewer@watchvim.com",
+      password:"watchvimviewer",
+      role:"viewer",
+      isActive:true,
+      createdAt:now
+    }
+  ];
+}
+
+function seedAds(){
+  return {
+    gamNetworkCode:"",
+    vastTagUrl:"",
+    prerollEnabled:true,
+    midrollEnabled:false,
+    postrollEnabled:false
+  };
+}
+
+function seedLoop(){
+  return {
+    channelName:"WatchVIM Live Loop",
+    isLive:false,
+    startTime:"",
+    endTime:"",
+    rotationTitleIds:[]
+  };
+}
+
+/* ==========================================================
+   DATA LAYER (localStorage now, backend later)
+========================================================== */
+
+/* ----------------------------- Content CRUD ------------------------------ */
+async function getContent(){
+  if(CONFIG.useBackend){
+    // TODO: backend mode
+    // const res = await fetch(`${CONFIG.apiBaseUrl}/content`);
+    // return await res.json();
+  }
+  return safeParse(localStorage.getItem(KEYS.content), seedContent());
+}
+
+async function saveContent(items){
+  if(CONFIG.useBackend){
+    // TODO: backend bulk save if you want
+    // await fetch(`${CONFIG.apiBaseUrl}/content/bulk`, { method:"POST", body: JSON.stringify(items) });
+  }
+  localStorage.setItem(KEYS.content, JSON.stringify(items));
+}
+
+async function upsertContent(item){
+  const items = await getContent();
+  const idx = items.findIndex(i=>i.id===item.id);
+  if(idx>=0) items[idx]=item; else items.unshift(item);
+  await saveContent(items);
+}
+
+async function deleteContent(id){
+  const items = await getContent();
+  await saveContent(items.filter(i=>i.id!==id));
+}
+
+/* ----------------------------- Users ------------------------------ */
+async function getUsers(){
+  if(CONFIG.useBackend){
+    // TODO: backend mode
+    // const res = await fetch(`${CONFIG.apiBaseUrl}/users`);
+    // return await res.json();
+  }
+  return safeParse(localStorage.getItem(KEYS.users), seedUsers());
+}
+
+async function saveUsers(items){
+  if(CONFIG.useBackend){
+    // TODO: backend save
+  }
+  localStorage.setItem(KEYS.users, JSON.stringify(items));
+}
+
+/* ----------------------------- Ads ------------------------------ */
+async function getAdsSettings(){
+  if(CONFIG.useBackend){
+    // TODO: backend mode
+  }
+  return safeParse(localStorage.getItem(KEYS.ads), seedAds());
+}
+
+async function saveAdsSettings(settings){
+  if(CONFIG.useBackend){
+    // TODO: backend save
+  }
+  localStorage.setItem(KEYS.ads, JSON.stringify(settings));
+}
+
+/* ----------------------------- Loop ------------------------------ */
+async function getLoopSettings(){
+  if(CONFIG.useBackend){
+    // TODO: backend mode
+  }
+  return safeParse(localStorage.getItem(KEYS.loop), seedLoop());
+}
+
+async function saveLoopSettings(settings){
+  if(CONFIG.useBackend){
+    // TODO: backend save
+  }
+  localStorage.setItem(KEYS.loop, JSON.stringify(settings));
+}
+
+/* ==========================================================
+   AUTH / SESSION
+========================================================== */
+
+function getSession(){
+  return safeParse(localStorage.getItem(KEYS.session), null);
+}
+function setSession(user){
+  localStorage.setItem(KEYS.session, JSON.stringify(user));
+}
+function clearSession(){
+  localStorage.removeItem(KEYS.session);
+}
+
+function hasRole(user, allowed){
+  return user && allowed.includes(user.role);
+}
+
+async function login(email, password){
+  const users = await getUsers();
+  const u = users.find(x => x.email.toLowerCase()===email.toLowerCase());
+  if(!u || !u.isActive) return { ok:false, msg:"User not found or inactive." };
+  if(u.password !== password) return { ok:false, msg:"Incorrect password." };
+  setSession({ id:u.id, name:u.name, email:u.email, role:u.role });
+  return { ok:true };
+}
+
+/* ==========================================================
+   UI SHELL
+========================================================== */
+
+function renderShell(){
+  const user = getSession();
+  if(!user){
+    renderLogin();
+    return;
+  }
+
+  $("#root").innerHTML = `
+    <div class="flex min-h-screen">
+      <aside class="w-[260px] bg-black border-r border-white/5 p-4 flex flex-col gap-2">
+        <div class="px-3 py-2 rounded-xl bg-white/5 mb-2">
+          <div class="text-watchGold font-bold text-lg">WatchVIM</div>
+          <div class="text-xs text-white/60">CMS Portal</div>
+        </div>
+        <div class="px-3 py-2 text-xs text-white/70 flex items-center justify-between bg-white/5 rounded-xl">
+          <span>${escapeHtml(user.name)}</span>
+          <span class="badge">${user.role}</span>
+        </div>
+        <nav id="sidebarNav" class="flex flex-col gap-1 mt-2"></nav>
+      </aside>
+
+      <main class="flex-1 bg-watchBlack">
+        <header class="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-watchBlack">
+          <h1 id="pageTitle" class="text-xl font-semibold">Dashboard</h1>
+          <div class="flex items-center gap-3">
+            <div class="text-sm text-white/60">${escapeHtml(user.email)}</div>
+            <button class="btn btn-ghost text-sm" onclick="handleLogout()">Logout</button>
+          </div>
+        </header>
+
+        <div id="app" class="p-6 space-y-6"></div>
+      </main>
+    </div>
+  `;
+
+  renderSidebar();
+  router();
+}
+
+function renderLogin(){
+  $("#root").innerHTML = `
+    <div class="min-h-screen flex items-center justify-center p-6">
+      <div class="w-full max-w-md card p-6 space-y-4">
+        <div class="text-center">
+          <div class="text-watchGold font-bold text-2xl">WatchVIM</div>
+          <div class="text-white/60 text-sm">CMS Portal Login</div>
+        </div>
+
+        <div class="space-y-2">
+          ${label("Email")}
+          <input id="login_email" class="input" placeholder="admin@watchvim.com"/>
+        </div>
+
+        <div class="space-y-2">
+          ${label("Password")}
+          <input id="login_pass" class="input" type="password" placeholder="••••••••"/>
+        </div>
+
+        <button class="w-full btn btn-primary" onclick="handleLogin()">Sign In</button>
+
+        <div id="login_msg" class="text-sm text-red-400"></div>
+
+        <div class="text-xs text-white/50 pt-2 border-t border-white/10">
+          Demo accounts:
+          <ul class="list-disc pl-5 mt-1">
+            <li>admin@watchvim.com / watchvimadmin</li>
+            <li>editor@watchvim.com / watchvimeditor</li>
+            <li>viewer@watchvim.com / watchvimviewer</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function handleLogin(){
+  const email = $("#login_email").value.trim();
+  const pass  = $("#login_pass").value.trim();
+  const msg = $("#login_msg");
+  msg.textContent = "";
+
+  const res = await login(email, pass);
+  if(!res.ok){
+    msg.textContent = res.msg || "Login failed.";
+    return;
+  }
+
+  location.hash = "#/dashboard";
+  renderShell();
+}
+
+function handleLogout(){
+  clearSession();
+  renderShell();
+}
+
+/* ==========================================================
+   ROUTES + ROLE GUARDS
+========================================================== */
+
+const routes = [
+  { path:"#/dashboard", label:"Dashboard", roles:["admin","editor","viewer"], render:renderDashboard },
+  { path:"#/content/films", label:"Films", roles:["admin","editor","viewer"], render:()=>renderContentList("films") },
+  { path:"#/content/series", label:"Series", roles:["admin","editor","viewer"], render:()=>renderContentList("series") },
+  { path:"#/content/documentaries", label:"Documentaries", roles:["admin","editor","viewer"], render:()=>renderContentList("documentaries") },
+
+  { path:"#/loop-channel", label:"Loop Channel", roles:["admin","editor"], render:renderLoopChannel },
+
+  { path:"#/users", label:"Users", roles:["admin"], render:renderUsers },
+
+  { path:"#/settings/ads", label:"Ads (GAM/VAST)", roles:["admin"], render:renderAds },
+  { path:"#/settings/payments", label:"Payments", roles:["admin"], render:renderPayments }
+];
+
+function renderSidebar(){
+  const user = getSession();
+  const nav = $("#sidebarNav");
+
+  nav.innerHTML = routes
+    .filter(r => hasRole(user, r.roles))
+    .map(r=>`
+      <a href="${r.path}" class="nav-link flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition text-white/80 hover:bg-white/5">
+        <span class="opacity-80">•</span>
+        <span>${r.label}</span>
+      </a>
+    `).join("");
+}
+
+function setActiveLink(){
+  const href = location.hash || "#/dashboard";
+  document.querySelectorAll(".nav-link").forEach(a=>{
+    a.classList.toggle("active-link", a.getAttribute("href")===href);
+  });
+}
+
+function router(){
+  const user = getSession();
+  if(!user){ renderLogin(); return; }
+
+  const hash = location.hash || "#/dashboard";
+  const route = routes.find(r=>r.path===hash);
+
+  if(!route){
+    location.hash = "#/dashboard";
+    return;
+  }
+
+  if(!hasRole(user, route.roles)){
+    $("#pageTitle").textContent = "Access Denied";
+    renderAccessDenied(route.roles);
+    setActiveLink();
+    return;
+  }
+
+  $("#pageTitle").textContent = route.label;
+  route.render();
+  setActiveLink();
+}
+
+window.addEventListener("hashchange", router);
+
+function renderAccessDenied(roles){
+  $("#app").innerHTML = `
+    <div class="card p-6">
+      <h2 class="text-lg font-semibold mb-2">Access Denied</h2>
+      <p class="text-white/70 text-sm">
+        This page requires one of these roles: <b>${roles.join(", ")}</b>.
+      </p>
+    </div>
+  `;
+}
+
+/* ==========================================================
+   PAGES
+========================================================== */
+
+/* ---------- Dashboard ---------- */
+async function renderDashboard(){
+  const app = $("#app");
+  const content = await getContent();
+  const films = content.filter(c=>c.type==="films").length;
+  const series = content.filter(c=>c.type==="series").length;
+  const docs = content.filter(c=>c.type==="documentaries").length;
+
+  app.innerHTML = `
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      ${statCard("Films", films)}
+      ${statCard("Series", series)}
+      ${statCard("Documentaries", docs)}
+    </div>
+
+    <div class="card p-6">
+      <h2 class="text-lg font-semibold mb-2">Quick Notes</h2>
+      <p class="text-white/70 text-sm">
+        Single-file CMS with login + roles. LocalStorage now.
+        Flip <code>CONFIG.useBackend</code> to true and wire endpoints when your API is ready.
+      </p>
+    </div>
+  `;
+}
+
+function statCard(label, value){
+  return `
+    <div class="card p-4">
+      <div class="text-sm text-white/60">${label}</div>
+      <div class="text-2xl font-bold mt-1">${value}</div>
+    </div>
+  `;
+}
+
+/* ---------- Content List ---------- */
+async function renderContentList(type){
+  const user = getSession();
+  const app = $("#app");
+  const items = (await getContent()).filter(c=>c.type===type);
+  const title = cap(type);
+  const canEdit = hasRole(user, ["admin","editor"]);
+
+  app.innerHTML = `
+    <div class="flex items-center justify-between">
+      <div class="text-white/70 text-sm">
+        Manage ${title}. Hero 1920×1080 • Poster 214×321
+      </div>
+      ${
+        canEdit
+          ? `<button class="btn btn-primary" onclick="openNewContentForm('${type}')">Add New</button>`
+          : `<div class="text-xs text-white/50">Viewer mode (read-only)</div>`
+      }
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-white/10">
+      <table class="w-full text-sm">
+        <thead class="bg-white/5 text-white/70">
+          <tr>
+            <th class="text-left p-3">Title</th>
+            <th class="text-left p-3">Monetization</th>
+            <th class="text-left p-3">Published</th>
+            <th class="text-left p-3">Updated</th>
+            <th class="text-right p-3">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            items.length
+              ? items.map(row=>contentRow(row, canEdit)).join("")
+              : emptyRow("No titles yet.")
+          }
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function contentRow(i, canEdit){
+  return `
+    <tr class="border-t border-white/5">
+      <td class="p-3 font-medium">${escapeHtml(i.title)}</td>
+      <td class="p-3">${i.monetization}</td>
+      <td class="p-3">${i.isPublished?"Yes":"No"}</td>
+      <td class="p-3">${new Date(i.updatedAt).toLocaleDateString()}</td>
+      <td class="p-3 text-right">
+        ${
+          canEdit
+            ? `
+              <button class="btn btn-ghost text-xs mr-2" onclick="openEditContentForm('${i.id}')">Edit</button>
+              <button class="btn btn-danger text-xs" onclick="handleDeleteContent('${i.id}','${i.type}')">Delete</button>
+            `
+            : `<span class="text-xs text-white/40">—</span>`
+        }
+      </td>
+    </tr>
+  `;
+}
+
+function emptyRow(msg){
+  return `<tr><td class="p-6 text-white/60" colspan="5">${msg}</td></tr>`;
+}
+
+function openNewContentForm(type){
+  renderContentForm({ type, mode:"new" });
+}
+
+async function openEditContentForm(id){
+  const item = (await getContent()).find(c=>c.id===id);
+  renderContentForm({ ...item, mode:"edit" });
+}
+
+function option(value, selected){
+  const isSel = value===selected ? "selected" : "";
+  const txt = {
+    free:"Free",
+    svod:"SVOD (subscription)",
+    tvod:"TVOD (rental)",
+    ad_supported:"Ad-Supported"
+  }[value] || value;
+  return `<option value="${value}" ${isSel}>${txt}</option>`;
+}
+
+function renderContentForm(item){
+  const user = getSession();
+  if(!hasRole(user, ["admin","editor"])) {
+    renderAccessDenied(["admin","editor"]);
+    return;
+  }
+
+  const app = $("#app");
+  const type = item.type;
+  const titleLabel = cap(type);
+
+  app.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h2 class="text-lg font-semibold">${item.mode==="new" ? "Add New" : "Edit"} ${titleLabel}</h2>
+      <button class="btn btn-ghost text-sm" onclick="location.hash='#/content/${type}'">← Back</button>
+    </div>
+
+    <div class="card p-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        <div class="space-y-3">
+          ${label("Title")}
+          <input id="c_title" class="input" value="${val(item.title)}"/>
+
+          ${label("Synopsis")}
+          <textarea id="c_synopsis" class="input textarea">${val(item.synopsis)}</textarea>
+
+          ${label("Genre (comma separated)")}
+          <input id="c_genre" class="input" value="${val((item.genre||[]).join(", "))}"/>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              ${label("Runtime (mins)")}
+              <input id="c_runtime" class="input" type="number" value="${val(item.runtimeMins)}"/>
+            </div>
+            <div>
+              ${label("Release Year")}
+              <input id="c_year" class="input" type="number" value="${val(item.releaseYear)}"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          ${label("Hero Image URL (1920×1080)")}
+          <input id="c_hero" class="input" value="${val(item.heroImage1920x1080)}"/>
+
+          ${label("Poster URL (214×321)")}
+          <input id="c_poster" class="input" value="${val(item.poster214x321)}"/>
+
+          ${label("Trailer URL")}
+          <input id="c_trailer" class="input" value="${val(item.trailerUrl)}"/>
+
+          ${label("Mux Playback ID (placeholder)")}
+          <input id="c_mux" class="input" value="${val(item.muxPlaybackId)}"/>
+
+          ${label("Monetization")}
+          <select id="c_monetization" class="input" onchange="togglePriceField()">
+            ${option("free", item.monetization)}
+            ${option("svod", item.monetization)}
+            ${option("tvod", item.monetization)}
+            ${option("ad_supported", item.monetization)}
+          </select>
+
+          <div id="priceWrap" style="display:${item.monetization==="tvod" ? "block":"none"}">
+            ${label("Price (USD)")}
+            <input id="c_price" class="input" type="number" step="0.01" value="${val(item.priceUSD)}"/>
+          </div>
+
+          <label class="flex items-center gap-2 text-sm text-white/80 mt-2">
+            <input id="c_published" type="checkbox" ${item.isPublished?"checked":""}/>
+            Published
+          </label>
+
+          <button class="w-full btn btn-primary mt-2"
+            onclick="handleSaveContent('${item.mode}','${item.id||""}','${type}')">
+            Save ${titleLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function togglePriceField(){
+  const mono = $("#c_monetization").value;
+  $("#priceWrap").style.display = mono==="tvod" ? "block" : "none";
+}
+
+async function handleSaveContent(mode, id, type){
+  const title = $("#c_title").value.trim();
+  if(!title){ alert("Title required."); return; }
+
+  const all = await getContent();
+  const old = mode==="edit" ? all.find(c=>c.id===id) : null;
+  const createdAt = old?.createdAt || nowIso();
+  const updatedAt = nowIso();
+
+  const monetization = $("#c_monetization").value;
+
+  const item = {
+    id: mode==="edit" ? id : uuid(),
+    type,
+    title,
+    synopsis: $("#c_synopsis").value.trim(),
+    genre: $("#c_genre").value.split(",").map(x=>x.trim()).filter(Boolean),
+    runtimeMins: numOrUndef($("#c_runtime").value),
+    releaseYear: numOrUndef($("#c_year").value),
+    heroImage1920x1080: $("#c_hero").value.trim(),
+    poster214x321: $("#c_poster").value.trim(),
+    trailerUrl: $("#c_trailer").value.trim(),
+    muxPlaybackId: $("#c_mux").value.trim(),
+    monetization,
+    priceUSD: monetization==="tvod" ? numOrUndef($("#c_price")?.value) : undefined,
+    isPublished: $("#c_published").checked,
+    createdAt,
+    updatedAt
+  };
+
+  await upsertContent(item);
+  location.hash = `#/content/${type}`;
+}
+
+async function handleDeleteContent(id, type){
+  if(!confirm("Delete this title?")) return;
+  await deleteContent(id);
+  renderContentList(type);
+}
+
+/* ---------- Users (Admin-only) ---------- */
+async function renderUsers(){
+  const app = $("#app");
+  const users = await getUsers();
+
+  app.innerHTML = `
+    <div class="card p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+      <input id="u_name" class="input" placeholder="Name"/>
+      <input id="u_email" class="input" placeholder="Email"/>
+      <input id="u_pass" class="input" placeholder="Temp Password"/>
+      <select id="u_role" class="input">
+        <option value="admin">Admin</option>
+        <option value="editor">Editor</option>
+        <option value="viewer" selected>Viewer</option>
+      </select>
+      <button class="btn btn-primary" onclick="handleAddUser()">Add User</button>
+    </div>
+
+    <div class="rounded-2xl border border-white/10 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-white/5 text-white/70">
+          <tr>
+            <th class="p-3 text-left">Name</th>
+            <th class="p-3 text-left">Email</th>
+            <th class="p-3 text-left">Role</th>
+            <th class="p-3 text-left">Active</th>
+            <th class="p-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map(u=>userRow(u)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function userRow(u){
+  return `
+    <tr class="border-t border-white/5">
+      <td class="p-3">${escapeHtml(u.name)}</td>
+      <td class="p-3">${escapeHtml(u.email)}</td>
+      <td class="p-3 capitalize">${u.role}</td>
+      <td class="p-3">${u.isActive?"Yes":"No"}</td>
+      <td class="p-3 text-right">
+        <button class="btn btn-ghost text-xs mr-2" onclick="toggleUserActive('${u.id}')">${u.isActive?"Disable":"Enable"}</button>
+        <button class="btn btn-danger text-xs" onclick="removeUser('${u.id}')">Remove</button>
+      </td>
+    </tr>
+  `;
+}
+
+async function handleAddUser(){
+  const name = $("#u_name").value.trim();
+  const email = $("#u_email").value.trim();
+  const password = $("#u_pass").value.trim();
+  const role = $("#u_role").value;
+  if(!name || !email || !password){ alert("Name, Email, Password required."); return; }
+
+  const users = await getUsers();
+  users.unshift({
+    id: uuid(),
+    name, email, password, role,
+    isActive:true,
+    createdAt: nowIso()
+  });
+  await saveUsers(users);
+  renderUsers();
+}
+
+async function toggleUserActive(id){
+  const users = (await getUsers()).map(u=>u.id===id ? {...u, isActive:!u.isActive} : u);
+  await saveUsers(users);
+  renderUsers();
+}
+
+async function removeUser(id){
+  if(!confirm("Remove this user?")) return;
+  const users = (await getUsers()).filter(u=>u.id!==id);
+  await saveUsers(users);
+  renderUsers();
+}
+
+/* ---------- Loop Channel (Admin/Editor) ---------- */
+async function renderLoopChannel(){
+  const app = $("#app");
+  const settings = await getLoopSettings();
+  const content = await getContent();
+
+  app.innerHTML = `
+    <div class="card p-4 space-y-3">
+      ${label("Channel Name")}
+      <input id="l_name" class="input" value="${val(settings.channelName)}"/>
+
+      <label class="flex items-center gap-2 text-sm text-white/80">
+        <input id="l_live" type="checkbox" ${settings.isLive?"checked":""}/>
+        Channel Live
+      </label>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          ${label("Start Time (ISO)")}
+          <input id="l_start" class="input" placeholder="2025-01-01T09:00:00Z" value="${val(settings.startTime)}"/>
+        </div>
+        <div>
+          ${label("End Time (ISO)")}
+          <input id="l_end" class="input" placeholder="2025-01-01T23:00:00Z" value="${val(settings.endTime)}"/>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="saveLoop()">Save Channel</button>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Rotation Titles</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        ${
+          content.length
+            ? content.map(c=>rotationRow(c, settings.rotationTitleIds)).join("")
+            : `<div class="text-white/60 text-sm">Add titles first.</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function rotationRow(c, rotationIds){
+  const checked = rotationIds.includes(c.id) ? "checked" : "";
+  return
