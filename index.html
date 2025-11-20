@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>WatchVIM CMS Portal</title>
 
-  <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Mux Player for previews -->
   <script src="https://cdn.jsdelivr.net/npm/@mux/mux-player" defer></script>
 
   <script>
@@ -74,7 +71,6 @@
     .small { font-size: 12px; color: rgba(255,255,255,0.6); }
     code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 6px; }
     details summary { cursor:pointer; }
-
     .bar {
       height: 10px; border-radius: 999px; background: rgba(255,255,255,0.08);
       overflow: hidden;
@@ -89,12 +85,10 @@
 <script>
 /* ==========================================================
    WatchVIM CMS — Single-file SPA
-   + Image Uploads
-   + Series → Seasons → Episodes drilldown
-   + Mux per title & per episode
-   + PayPal settings UI (client-id only)
-   + Dashboard analytics
-   + Reliable back navigation
+   - Vercel Blob image uploads for hero/poster (/api/upload)
+   - Series → Seasons → Episodes drilldown
+   - Dashboard analytics (local)
+   - NEW: Publish catalog to Blob (/api/publish)
 ========================================================== */
 
 const CONFIG = {
@@ -111,8 +105,6 @@ const KEYS = {
   payments: "watchvim_cms_payments",
   analytics:"watchvim_cms_analytics"
 };
-
-const NAV_KEY = "watchvim_nav_stack";
 
 const $ = (sel) => document.querySelector(sel);
 const nowIso = () => new Date().toISOString();
@@ -133,59 +125,40 @@ function val(v){ return v==null ? "" : String(v); }
 function numOrUndef(v){ const n = Number(v); return Number.isFinite(n) && v!=="" ? n : undefined; }
 function label(t){ return `<label class="text-sm text-white/70">${t}</label>`; }
 
-/* temp images for title-level uploads */
+/* temp images store Blob URLs now */
 let tempImages = { hero:null, poster:null };
-
-/* temp draft for series nested editing */
 let tempSeriesDraft = null;
 
 /* ==========================================================
-   NAV / BACK FIX
+   SECTION-SCOPED BACK
 ========================================================== */
-function getNavStack(){
-  return safeParse(sessionStorage.getItem(NAV_KEY), []);
+function getParentSectionRoute(hash){
+  if(hash.startsWith("#/content/films")) return "#/content/films";
+  if(hash.startsWith("#/content/series")) return "#/content/series";
+  if(hash.startsWith("#/content/documentaries")) return "#/content/documentaries";
+  if(hash.startsWith("#/users")) return "#/users";
+  if(hash.startsWith("#/loop-channel")) return "#/loop-channel";
+  if(hash.startsWith("#/settings/ads")) return "#/settings/ads";
+  if(hash.startsWith("#/settings/payments")) return "#/settings/payments";
+  return "#/dashboard";
 }
-function setNavStack(stack){
-  sessionStorage.setItem(NAV_KEY, JSON.stringify(stack));
+function goBackSection(){
+  location.hash = getParentSectionRoute(location.hash || "#/dashboard");
 }
-function pushNav(hash){
-  const stack = getNavStack();
-  if(stack[stack.length-1] !== hash){
-    stack.push(hash);
-    if(stack.length > 50) stack.shift();
-    setNavStack(stack);
-  }
-}
-function initNav(){
-  const start = location.hash || "#/dashboard";
-  setNavStack([start]);
-}
-function goBack(fallback="#/dashboard"){
-  const stack = getNavStack();
-  // pop current
-  stack.pop();
-  // previous hash
-  const prev = stack.pop();
-  setNavStack(stack.length ? stack : [fallback]);
-  location.hash = prev || fallback;
-}
+function goTo(hash){ location.hash = hash; }
 
 /* ==========================================================
-   ANALYTICS (static/local)
+   ANALYTICS (local)
 ========================================================== */
 function seedAnalytics(){
   return {
     totals: {
-      titlesCreated:0,
-      titlesEdited:0,
-      titlesDeleted:0,
-      seasonsCreated:0,
-      seasonsDeleted:0,
-      episodesCreated:0,
-      episodesDeleted:0
+      titlesCreated:0, titlesEdited:0, titlesDeleted:0,
+      seasonsCreated:0, seasonsDeleted:0,
+      episodesCreated:0, episodesDeleted:0
     },
-    dailyEdits: {},          // "YYYY-MM-DD": count
-    lastActions: []          // [{at, action, label}]
+    dailyEdits: {},
+    lastActions: []
   };
 }
 async function getAnalytics(){
@@ -212,8 +185,48 @@ async function resetAnalytics(){
 }
 
 /* ==========================================================
-   Seed data
+   NEW: PUBLISH CATALOG TO APPS (Path 1)
+   Requires /api/publish.js in repo.
 ========================================================== */
+async function publishCatalog(){
+  const statusEl = $("#publishStatus");
+  if(statusEl) statusEl.textContent = "Publishing…";
+
+  try {
+    const content = await getContent();
+    const res = await fetch("/api/publish", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(content)
+    });
+    const data = await res.json();
+
+    if(!res.ok){
+      if(statusEl) statusEl.textContent = "Publish failed: " + (data.error || "unknown error");
+      return;
+    }
+
+    if(statusEl){
+      statusEl.innerHTML = `
+        ✅ Published! Version: <b>${data.version}</b><br/>
+        <div class="mt-1">
+          <b>Manifest URL (use in ALL apps):</b><br/>
+          <code style="word-break:break-all">${data.manifestUrl}</code>
+        </div>
+        <div class="mt-2">
+          <b>Latest Catalog URL:</b><br/>
+          <code style="word-break:break-all">${data.catalogUrl}</code>
+        </div>
+      `;
+    }
+
+    await logAction("Catalog Published", `v${data.version}`);
+  } catch (e) {
+    if(statusEl) statusEl.textContent = "Publish failed: " + e.message;
+  }
+}
+
+/* ---------------- Seed data ---------------- */
 function seedContent(){
   const now = nowIso();
   return [
@@ -292,15 +305,11 @@ function seedAds(){ return { gamNetworkCode:"", vastTagUrl:"", prerollEnabled:tr
 function seedLoop(){ return { channelName:"WatchVIM Live Loop", isLive:false, startTime:"", endTime:"", rotationTitleIds:[] }; }
 function seedPayments(){ return { paypalClientId:"", paypalEnv:"sandbox" }; }
 
-/* ==========================================================
-   Data layer
-========================================================== */
+/* ---------------- Data layer ---------------- */
 async function getContent(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.content), seedContent());
 }
 async function saveContent(items){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.content, JSON.stringify(items));
 }
 async function upsertContent(item, modeHint="edit"){
@@ -324,43 +333,32 @@ async function deleteContent(id){
   await bumpTotal("titlesDeleted");
   if(removed) await logAction("Title Deleted", `${removed.type}: ${removed.title}`);
 }
-
 async function getUsers(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.users), seedUsers());
 }
 async function saveUsers(items){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.users, JSON.stringify(items));
 }
 async function getAdsSettings(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.ads), seedAds());
 }
 async function saveAdsSettings(settings){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.ads, JSON.stringify(settings));
 }
 async function getLoopSettings(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.loop), seedLoop());
 }
 async function saveLoopSettings(settings){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.loop, JSON.stringify(settings));
 }
 async function getPaymentsSettings(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.payments), seedPayments());
 }
 async function savePaymentsSettings(settings){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.payments, JSON.stringify(settings));
 }
 
-/* ==========================================================
-   Session / Auth
-========================================================== */
+/* ---------------- Session ---------------- */
 function getSession(){ return safeParse(localStorage.getItem(KEYS.session), null); }
 function setSession(user){ localStorage.setItem(KEYS.session, JSON.stringify(user)); }
 function clearSession(){ localStorage.removeItem(KEYS.session); }
@@ -375,9 +373,7 @@ async function login(email, password){
   return { ok:true };
 }
 
-/* ==========================================================
-   UI Shell
-========================================================== */
+/* ---------------- Shell ---------------- */
 function renderShell(){
   const user = getSession();
   if(!user){ renderLogin(); return; }
@@ -399,7 +395,7 @@ function renderShell(){
       <main class="flex-1 bg-watchBlack">
         <header class="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-watchBlack">
           <div class="flex items-center gap-3">
-            <button id="globalBackBtn" class="btn btn-ghost text-sm" onclick="goBack()">← Back</button>
+            <button id="globalBackBtn" class="btn btn-ghost text-sm" onclick="goBackSection()">← Back</button>
             <h1 id="pageTitle" class="text-xl font-semibold">Dashboard</h1>
           </div>
           <div class="flex items-center gap-3">
@@ -413,7 +409,6 @@ function renderShell(){
   `;
 
   renderSidebar();
-  initNav();
   router();
 }
 
@@ -463,9 +458,7 @@ async function handleLogin(){
 }
 function handleLogout(){ clearSession(); renderShell(); }
 
-/* ==========================================================
-   Routes
-========================================================== */
+/* ---------------- Routes ---------------- */
 const routes = [
   { path:"#/dashboard", label:"Dashboard", roles:["admin","editor","viewer"], render:renderDashboard },
   { path:"#/content/films", label:"Films", roles:["admin","editor","viewer"], render:()=>renderContentList("films") },
@@ -501,8 +494,6 @@ function router(){
   if(!user){ renderLogin(); return; }
 
   const hash = location.hash || "#/dashboard";
-  pushNav(hash);
-
   const route = routes.find(r=>r.path===hash);
   if(!route){ location.hash = "#/dashboard"; return; }
 
@@ -515,7 +506,6 @@ function router(){
 
   $("#pageTitle").textContent = route.label;
 
-  // hide global back on dashboard
   const backBtn = $("#globalBackBtn");
   if(backBtn) backBtn.style.display = (hash==="#/dashboard") ? "none" : "inline-flex";
 
@@ -535,9 +525,7 @@ function renderAccessDenied(roles){
   `;
 }
 
-/* ==========================================================
-   Dashboard with Analytics
-========================================================== */
+/* ---------------- Dashboard ---------------- */
 async function renderDashboard(){
   const content = await getContent();
   const a = await getAnalytics();
@@ -561,7 +549,6 @@ async function renderDashboard(){
   }, {});
   const maxMono = Math.max(1, ...Object.values(monetizationCounts));
 
-  // storage estimate
   const contentBytes = (localStorage.getItem(KEYS.content)||"").length;
   const approxMb = (contentBytes / (1024*1024)).toFixed(2);
 
@@ -577,6 +564,19 @@ async function renderDashboard(){
       ${statCard("Drafts", drafts)}
       ${statCard("Seasons", seasonCount)}
       ${statCard("Episodes", episodeCount)}
+    </div>
+
+    <!-- PUBLISH CARD -->
+    <div class="card p-5 space-y-3">
+      <div class="font-semibold text-lg">Publish to Frontend + Apps</div>
+      <div class="text-sm text-white/70">
+        Clicking publish uploads a <b>manifest.json</b> and a versioned <b>catalog.json</b>
+        to Vercel Blob. Use the manifest URL in your frontend, iOS/Android, Apple TV, Fire TV, Roku, etc.
+      </div>
+      <button class="btn btn-primary w-full md:w-auto" onclick="publishCatalog()">
+        Publish Catalog to Apps
+      </button>
+      <div id="publishStatus" class="text-sm text-white/80"></div>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -601,19 +601,19 @@ async function renderDashboard(){
         <div class="grid grid-cols-2 gap-3 text-sm">
           <div class="card p-3 bg-black/40">
             <div class="text-white/60">Titles Created</div>
-            <div class="text-xl font-bold">${a.totals.titlesCreated}</div>
+            <div class="text-xl font-bold">${a.totals.titlesCreated||0}</div>
           </div>
           <div class="card p-3 bg-black/40">
             <div class="text-white/60">Titles Edited</div>
-            <div class="text-xl font-bold">${a.totals.titlesEdited}</div>
+            <div class="text-xl font-bold">${a.totals.titlesEdited||0}</div>
           </div>
           <div class="card p-3 bg-black/40">
             <div class="text-white/60">Titles Deleted</div>
-            <div class="text-xl font-bold">${a.totals.titlesDeleted}</div>
+            <div class="text-xl font-bold">${a.totals.titlesDeleted||0}</div>
           </div>
           <div class="card p-3 bg-black/40">
             <div class="text-white/60">Seasons / Episodes Added</div>
-            <div class="text-xl font-bold">${a.totals.seasonsCreated} / ${a.totals.episodesCreated}</div>
+            <div class="text-xl font-bold">${a.totals.seasonsCreated||0} / ${a.totals.episodesCreated||0}</div>
           </div>
         </div>
 
@@ -630,15 +630,15 @@ async function renderDashboard(){
     <div class="card p-5 space-y-3">
       <div class="font-semibold">Recent Activity</div>
       ${
-        a.lastActions.length
+        (a.lastActions||[]).length
           ? `<div class="space-y-2">
-              ${a.lastActions.map(x=>`
+              ${(a.lastActions||[]).map(x=>`
                 <div class="flex justify-between text-sm bg-black/40 border border-white/5 rounded-xl p-3">
                   <div>
-                    <div class="font-semibold">${escapeHtml(x.action)}</div>
-                    <div class="text-white/60">${escapeHtml(x.label)}</div>
+                    <div class="font-semibold">${escapeHtml(x.action||"")}</div>
+                    <div class="text-white/60">${escapeHtml(x.label||"")}</div>
                   </div>
-                  <div class="text-white/50">${new Date(x.at).toLocaleString()}</div>
+                  <div class="text-white/50">${new Date(x.at||Date.now()).toLocaleString()}</div>
                 </div>
               `).join("")}
             </div>`
@@ -647,7 +647,6 @@ async function renderDashboard(){
     </div>
   `;
 }
-
 function statCard(labelTxt, value){
   return `
     <div class="card p-4">
@@ -657,9 +656,7 @@ function statCard(labelTxt, value){
   `;
 }
 
-/* ==========================================================
-   Content list & forms (films/docs/series)
-========================================================== */
+/* ---------------- Content list ---------------- */
 async function renderContentList(type){
   const user = getSession();
   const items = (await getContent()).filter(c=>c.type===type);
@@ -671,9 +668,10 @@ async function renderContentList(type){
       <div class="text-white/70 text-sm">
         Manage ${title}. Hero 1920×1080 • Poster 214×321
       </div>
-      ${canEdit
-        ? `<button class="btn btn-primary" onclick="openNewContentForm('${type}')">Add New</button>`
-        : `<div class="text-xs text-white/50">Viewer mode (read-only)</div>`
+      ${
+        canEdit
+          ? `<button class="btn btn-primary" onclick="openNewContentForm('${type}')">Add New</button>`
+          : `<div class="text-xs text-white/50">Viewer mode (read-only)</div>`
       }
     </div>
 
@@ -696,7 +694,6 @@ async function renderContentList(type){
     </div>
   `;
 }
-
 function contentRow(i, canEdit){
   const muxOk = (i.mux?.trailerPlaybackId || i.mux?.contentPlaybackId) ? "Connected" : "—";
   const seasons = i.seasons?.length || 0;
@@ -705,7 +702,8 @@ function contentRow(i, canEdit){
   return `
     <tr class="border-t border-white/5">
       <td class="p-3 font-medium">${escapeHtml(i.title)}</td>
-      ${i.type==="series"
+      ${
+        i.type==="series"
           ? `<td class="p-3">${seasons} seasons / ${episodes} eps</td>`
           : `<td class="p-3">${muxOk}</td>`
       }
@@ -713,10 +711,14 @@ function contentRow(i, canEdit){
       <td class="p-3">${i.isPublished?"Yes":"No"}</td>
       <td class="p-3">${new Date(i.updatedAt).toLocaleDateString()}</td>
       <td class="p-3 text-right">
-        ${canEdit ? `
-          <button class="btn btn-ghost text-xs mr-2" onclick="openEditContentForm('${i.id}')">Edit</button>
-          <button class="btn btn-danger text-xs" onclick="handleDeleteContent('${i.id}','${i.type}')">Delete</button>
-        ` : `<span class="text-xs text-white/40">—</span>`}
+        ${
+          canEdit
+            ? `
+              <button class="btn btn-ghost text-xs mr-2" onclick="openEditContentForm('${i.id}')">Edit</button>
+              <button class="btn btn-danger text-xs" onclick="handleDeleteContent('${i.id}','${i.type}')">Delete</button>
+            `
+            : `<span class="text-xs text-white/40">—</span>`
+        }
       </td>
     </tr>
   `;
@@ -748,21 +750,34 @@ function option(value, selected){
   return `<option value="${value}" ${isSel}>${txt}</option>`;
 }
 
-/* Title-level image upload */
-function handleImageUpload(evt, kind){
+/* ==========================================================
+   HERO/POSTER UPLOAD → Vercel Blob
+========================================================== */
+async function handleImageUpload(evt, kind){
   const file = evt.target.files?.[0];
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = reader.result;
-    tempImages[kind] = dataUrl;
-    const imgEl = kind==="hero" ? $("#heroPreview") : $("#posterPreview");
-    if(imgEl) imgEl.src = dataUrl;
-  };
-  reader.readAsDataURL(file);
+
+  const previewURL = URL.createObjectURL(file);
+  const imgEl = kind==="hero" ? $("#heroPreview") : $("#posterPreview");
+  if(imgEl) imgEl.src = previewURL;
+
+  const safeName = file.name.replace(/\s+/g, "-");
+  const res = await fetch(`/api/upload?filename=${encodeURIComponent(safeName)}`, {
+    method: "POST",
+    body: file
+  });
+  const data = await res.json();
+
+  if(!res.ok){
+    alert("Upload failed: " + (data.error || "unknown error"));
+    return;
+  }
+
+  tempImages[kind] = data.url;
+  if(imgEl) imgEl.src = data.url;
 }
 
-/* Episode thumbnail upload */
+/* Episode thumb (still local base64) */
 function handleEpisodeThumbUpload(evt, seasonId, epId){
   const file = evt.target.files?.[0];
   if(!file || !tempSeriesDraft) return;
@@ -777,6 +792,7 @@ function handleEpisodeThumbUpload(evt, seasonId, epId){
   reader.readAsDataURL(file);
 }
 
+/* ---------------- Content form ---------------- */
 function renderContentForm(item){
   const user = getSession();
   if(!hasRole(user, ["admin","editor"])) {
@@ -794,13 +810,12 @@ function renderContentForm(item){
   $("#app").innerHTML = `
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold">${item.mode==="new" ? "Add New" : "Edit"} ${titleLabel}</h2>
-      <button class="btn btn-ghost text-sm" onclick="goBack('#/content/${type}')">← Back</button>
+      <button class="btn btn-ghost text-sm" onclick="goTo('#/content/${type}')">← Back</button>
     </div>
 
     <div class="card p-6">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        <!-- Left column -->
         <div class="space-y-4">
           ${label("Title")}
           <input id="c_title" class="input" value="${val(item.title)}"/>
@@ -848,10 +863,8 @@ function renderContentForm(item){
           </label>
         </div>
 
-        <!-- Right column -->
         <div class="space-y-6">
 
-          <!-- HERO IMAGE -->
           <div class="card p-4 space-y-2">
             <div class="font-semibold">Hero Image (1920×1080)</div>
             <div class="flex items-start gap-4">
@@ -859,7 +872,7 @@ function renderContentForm(item){
               <div class="flex-1 space-y-2">
                 <input type="file" accept="image/*"
                   onchange="handleImageUpload(event,'hero')" class="input"/>
-                <div class="small">Stores as base64 in localStorage. Keep under ~1–2MB.</div>
+                <div class="small">Uploads to Vercel Blob. URL saved to title.</div>
 
                 ${label("OR Hero Image URL")}
                 <input id="c_hero" class="input" value="${val(item.heroImage1920x1080)}"/>
@@ -867,7 +880,6 @@ function renderContentForm(item){
             </div>
           </div>
 
-          <!-- POSTER -->
           <div class="card p-4 space-y-2">
             <div class="font-semibold">Poster (214×321)</div>
             <div class="flex items-start gap-4">
@@ -875,7 +887,7 @@ function renderContentForm(item){
               <div class="flex-1 space-y-2">
                 <input type="file" accept="image/*"
                   onchange="handleImageUpload(event,'poster')" class="input"/>
-                <div class="small">Same storage note as above.</div>
+                <div class="small">Uploads to Vercel Blob. URL saved to title.</div>
 
                 ${label("OR Poster URL")}
                 <input id="c_poster" class="input" value="${val(item.poster214x321)}"/>
@@ -883,7 +895,6 @@ function renderContentForm(item){
             </div>
           </div>
 
-          <!-- MUX CONFIG -->
           <div class="card p-4 space-y-3">
             <div class="font-semibold">Mux Configuration (${type==="series" ? "Series Trailer" : "Trailer + Full Content"})</div>
             <div class="small">Playback ID enables preview. HLS: <code>https://stream.mux.com/{PLAYBACK_ID}.m3u8</code></div>
@@ -915,7 +926,6 @@ function renderContentForm(item){
             <div id="muxPreviews" class="space-y-3"></div>
           </div>
 
-          <!-- SERIES BLOCK -->
           ${type==="series" ? `<div id="seriesBlock" class="space-y-3"></div>` : ``}
 
           <button class="w-full btn btn-primary"
@@ -943,7 +953,7 @@ function togglePriceField(){
   $("#priceWrap").style.display = mono==="tvod" ? "block" : "none";
 }
 
-/* Mux previews */
+/* ---------------- Mux previews ---------------- */
 function renderMuxPreviews(type){
   const trailerPid = $("#mux_trailer_playback")?.value.trim();
   const contentPid = $("#mux_content_playback")?.value.trim();
@@ -1121,7 +1131,7 @@ function episodeMuxPreviewBlock(trailerPid, contentPid){
   return block(trailerPid, "Trailer") + block(contentPid, "Episode");
 }
 
-/* Series CRUD */
+/* --- Series CRUD --- */
 async function addSeason(){
   if(!tempSeriesDraft) return;
   const seasons = tempSeriesDraft.seasons || [];
@@ -1135,8 +1145,10 @@ async function addSeason(){
     episodes:[]
   });
   tempSeriesDraft.seasons = seasons;
+
   await bumpTotal("seasonsCreated");
   await logAction("Season Added", `${tempSeriesDraft.title} — Season ${nextNum}`);
+
   renderSeriesSeasonsBlock();
 }
 
@@ -1159,8 +1171,10 @@ async function deleteSeason(seasonId){
   if(!confirm("Delete this season and its episodes?")) return;
   const s = tempSeriesDraft.seasons.find(x=>x.id===seasonId);
   tempSeriesDraft.seasons = (tempSeriesDraft.seasons||[]).filter(se=>se.id!==seasonId);
+
   await bumpTotal("seasonsDeleted");
   await logAction("Season Deleted", `${tempSeriesDraft.title} — ${s?.title || "Season"}`);
+
   renderSeriesSeasonsBlock();
 }
 
@@ -1187,8 +1201,10 @@ async function addEpisode(seasonId){
       contentPlaybackId:""
     }
   });
+
   await bumpTotal("episodesCreated");
   await logAction("Episode Added", `${tempSeriesDraft.title} — S${season.seasonNumber}E${nextEp}`);
+
   renderSeriesSeasonsBlock();
 }
 
@@ -1197,8 +1213,10 @@ async function deleteEpisode(seasonId, epId){
   const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
   const ep = season.episodes.find(e=>e.id===epId);
   season.episodes = (season.episodes||[]).filter(e=>e.id!==epId);
+
   await bumpTotal("episodesDeleted");
   await logAction("Episode Deleted", `${tempSeriesDraft.title} — ${ep?.title||"Episode"}`);
+
   renderSeriesSeasonsBlock();
 }
 
@@ -1211,12 +1229,14 @@ function updateEpisode(seasonId, epId, field, value){
     ep[field] = value;
   }
 }
+
 function updateEpisodeMux(seasonId, epId, field, value){
   const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
   const ep = season.episodes.find(e=>e.id===epId);
   ep.mux = ep.mux || {};
   ep.mux[field] = value.trim();
 }
+
 function renderEpisodeMuxPreview(seasonId, epId){
   const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
   const ep = season.episodes.find(e=>e.id===epId);
@@ -1225,7 +1245,7 @@ function renderEpisodeMuxPreview(seasonId, epId){
   el.innerHTML = episodeMuxPreviewBlock(ep.mux?.trailerPlaybackId, ep.mux?.contentPlaybackId);
 }
 
-/* Save title */
+/* ---------------- Save title ---------------- */
 async function handleSaveContent(mode, id, type){
   const title = $("#c_title").value.trim();
   if(!title){ alert("Title required."); return; }
@@ -1245,8 +1265,10 @@ async function handleSaveContent(mode, id, type){
     releaseYear: numOrUndef($("#c_year").value),
     heroImage1920x1080: $("#c_hero")?.value.trim() || "",
     poster214x321: $("#c_poster")?.value.trim() || "",
+
     heroImageDataUrl: tempImages.hero ?? old?.heroImageDataUrl ?? "",
     posterImageDataUrl: tempImages.poster ?? old?.posterImageDataUrl ?? "",
+
     monetization,
     priceUSD: monetization==="tvod" ? numOrUndef($("#c_price")?.value) : undefined,
     isPublished: $("#c_published").checked,
@@ -1272,6 +1294,7 @@ async function handleSaveContent(mode, id, type){
 
   await upsertContent(baseItem, mode==="new" ? "new" : "edit");
   tempSeriesDraft = null;
+
   location.hash = `#/content/${type}`;
 }
 
@@ -1281,11 +1304,10 @@ async function handleDeleteContent(id, type){
   renderContentList(type);
 }
 
-/* ==========================================================
-   Users page (unchanged)
-========================================================== */
-async function renderUsers(){ /* same as before */
+/* ---------------- Users ---------------- */
+async function renderUsers(){
   const users = await getUsers();
+
   $("#app").innerHTML = `
     <div class="card p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
       <input id="u_name" class="input" placeholder="Name"/>
@@ -1317,6 +1339,7 @@ async function renderUsers(){ /* same as before */
     </div>
   `;
 }
+
 function userRow(u){
   return `
     <tr class="border-t border-white/5">
@@ -1331,35 +1354,41 @@ function userRow(u){
     </tr>
   `;
 }
+
 async function handleAddUser(){
   const name = $("#u_name").value.trim();
   const email = $("#u_email").value.trim();
   const password = $("#u_pass").value.trim();
   const role = $("#u_role").value;
   if(!name || !email || !password){ alert("Name, Email, Password required."); return; }
+
   const users = await getUsers();
   users.unshift({ id: uuid(), name, email, password, role, isActive:true, createdAt: nowIso() });
   await saveUsers(users);
+
   await logAction("User Added", `${name} (${role})`);
+
   renderUsers();
 }
 async function toggleUserActive(id){
   const users = (await getUsers()).map(u=>u.id===id ? {...u, isActive:!u.isActive} : u);
   await saveUsers(users);
+
   await logAction("User Toggled", id);
+
   renderUsers();
 }
 async function removeUser(id){
   if(!confirm("Remove this user?")) return;
   const users = (await getUsers()).filter(u=>u.id!==id);
   await saveUsers(users);
+
   await logAction("User Removed", id);
+
   renderUsers();
 }
 
-/* ==========================================================
-   Loop Channel (unchanged)
-========================================================== */
+/* ---------------- Loop Channel ---------------- */
 async function renderLoopChannel(){
   const settings = await getLoopSettings();
   const content = await getContent();
@@ -1391,14 +1420,16 @@ async function renderLoopChannel(){
     <div class="card p-4">
       <h3 class="font-semibold mb-2">Rotation Titles</h3>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-        ${content.length
-          ? content.map(c=>rotationRow(c, settings.rotationTitleIds)).join("")
-          : `<div class="text-white/60 text-sm">Add titles first.</div>`
+        ${
+          content.length
+            ? content.map(c=>rotationRow(c, settings.rotationTitleIds)).join("")
+            : `<div class="text-white/60 text-sm">Add titles first.</div>`
         }
       </div>
     </div>
   `;
 }
+
 function rotationRow(c, rotationIds){
   const checked = rotationIds.includes(c.id) ? "checked" : "";
   return `
@@ -1422,14 +1453,14 @@ async function saveLoop(){
   settings.startTime = $("#l_start").value.trim();
   settings.endTime = $("#l_end").value.trim();
   await saveLoopSettings(settings);
+
   await logAction("Loop Saved", settings.channelName);
+
   alert("Loop channel settings saved.");
   renderLoopChannel();
 }
 
-/* ==========================================================
-   Ads & Payments
-========================================================== */
+/* ---------------- Ads ---------------- */
 async function renderAds(){
   const ads = await getAdsSettings();
   $("#app").innerHTML = `
@@ -1452,6 +1483,7 @@ async function saveAds(){
   alert("Ads settings saved.");
 }
 
+/* ---------------- Payments ---------------- */
 let paypalSdkEl = null;
 
 async function renderPayments(){
@@ -1463,15 +1495,18 @@ async function renderPayments(){
       <h2 class="text-lg font-semibold">Payment Gateway — PayPal</h2>
 
       <div class="text-sm text-white/70">
-        Store only your <b>PayPal Client ID</b> here.  
+        Store only your <b>PayPal Client ID</b> here.
         <b>Do NOT enter Client Secret in the CMS.</b>
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div class="space-y-2">
           ${label("PayPal Client ID (public)")}
-          <input id="pp_client" class="input" placeholder="AQ...your_client_id..." value="${val(p.paypalClientId)}" />
+          <input id="pp_client" class="input"
+                 placeholder="AQ...your_client_id..."
+                 value="${val(p.paypalClientId)}" />
         </div>
+
         <div class="space-y-2">
           ${label("Environment")}
           <select id="pp_env" class="input">
@@ -1491,6 +1526,7 @@ async function renderPayments(){
         <div class="font-semibold">PayPal Test Checkout</div>
         <div id="paypal-button-container" class="mt-2"></div>
         <div id="paypal-status" class="text-sm text-white/70"></div>
+
         <button class="btn btn-ghost text-sm" onclick="renderPayPalTestButton()">
           Load / Refresh Test Button
         </button>
@@ -1502,6 +1538,7 @@ async function renderPayments(){
     renderPayPalTestButton();
   }
 }
+
 async function handleSavePayments(){
   const settings = {
     paypalClientId: $("#pp_client").value.trim(),
@@ -1535,10 +1572,14 @@ async function renderPayPalTestButton(){
 
   paypal.Buttons({
     createOrder: async () => {
+      // NOTE: These endpoints are placeholders unless you add them later.
       const res = await fetch("/api/paypal/create-order", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ amount:"5.99", description:"WatchVIM Test Purchase" })
+        body: JSON.stringify({
+          amount: "5.99",
+          description: "WatchVIM Test Purchase"
+        })
       });
       const data = await res.json();
       return data.id;
@@ -1573,9 +1614,7 @@ function ensurePayPalSDK(clientId){
   });
 }
 
-/* ==========================================================
-   Boot
-========================================================== */
+/* ---------------- Boot ---------------- */
 renderShell();
 </script>
 </body>
