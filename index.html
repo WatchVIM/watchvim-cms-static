@@ -770,4 +770,813 @@ function handleEpisodeThumbUpload(evt, seasonId, epId){
   reader.onload = () => {
     const dataUrl = reader.result;
     const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
-    const ep = season.
+    const ep = season.episodes.find(e=>e.id===epId);
+    ep.thumbDataUrl = dataUrl;
+    renderSeriesSeasonsBlock();
+  };
+  reader.readAsDataURL(file);
+}
+
+function renderContentForm(item){
+  const user = getSession();
+  if(!hasRole(user, ["admin","editor"])) {
+    renderAccessDenied(["admin","editor"]);
+    return;
+  }
+
+  const type = item.type;
+  const titleLabel = cap(type);
+
+  const heroSrc = item.heroImageDataUrl || item.heroImage1920x1080 || "";
+  const posterSrc = item.posterImageDataUrl || item.poster214x321 || "";
+  const mux = item.mux || {};
+
+  $("#app").innerHTML = `
+    <div class="flex items-center justify-between">
+      <h2 class="text-lg font-semibold">${item.mode==="new" ? "Add New" : "Edit"} ${titleLabel}</h2>
+      <button class="btn btn-ghost text-sm" onclick="goBack('#/content/${type}')">← Back</button>
+    </div>
+
+    <div class="card p-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        <!-- Left column -->
+        <div class="space-y-4">
+          ${label("Title")}
+          <input id="c_title" class="input" value="${val(item.title)}"/>
+
+          ${label("Synopsis")}
+          <textarea id="c_synopsis" class="input textarea">${val(item.synopsis)}</textarea>
+
+          ${label("Genre (comma separated)")}
+          <input id="c_genre" class="input" value="${val((item.genre||[]).join(", "))}"/>
+
+          ${type!=="series" ? `
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              ${label("Runtime (mins)")}
+              <input id="c_runtime" class="input" type="number" value="${val(item.runtimeMins)}"/>
+            </div>
+            <div>
+              ${label("Release Year")}
+              <input id="c_year" class="input" type="number" value="${val(item.releaseYear)}"/>
+            </div>
+          </div>
+          ` : `
+          <div>
+            ${label("Release Year")}
+            <input id="c_year" class="input" type="number" value="${val(item.releaseYear)}"/>
+          </div>
+          `}
+
+          ${label("Monetization")}
+          <select id="c_monetization" class="input" onchange="togglePriceField()">
+            ${option("free", item.monetization)}
+            ${option("svod", item.monetization)}
+            ${option("tvod", item.monetization)}
+            ${option("ad_supported", item.monetization)}
+          </select>
+
+          <div id="priceWrap" style="display:${item.monetization==="tvod" ? "block":"none"}">
+            ${label("Price (USD)")}
+            <input id="c_price" class="input" type="number" step="0.01" value="${val(item.priceUSD)}"/>
+          </div>
+
+          <label class="flex items-center gap-2 text-sm text-white/80 mt-2">
+            <input id="c_published" type="checkbox" ${item.isPublished?"checked":""}/>
+            Published
+          </label>
+        </div>
+
+        <!-- Right column -->
+        <div class="space-y-6">
+
+          <!-- HERO IMAGE -->
+          <div class="card p-4 space-y-2">
+            <div class="font-semibold">Hero Image (1920×1080)</div>
+            <div class="flex items-start gap-4">
+              <img id="heroPreview" class="thumb" src="${heroSrc}"/>
+              <div class="flex-1 space-y-2">
+                <input type="file" accept="image/*"
+                  onchange="handleImageUpload(event,'hero')" class="input"/>
+                <div class="small">Stores as base64 in localStorage. Keep under ~1–2MB.</div>
+
+                ${label("OR Hero Image URL")}
+                <input id="c_hero" class="input" value="${val(item.heroImage1920x1080)}"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- POSTER -->
+          <div class="card p-4 space-y-2">
+            <div class="font-semibold">Poster (214×321)</div>
+            <div class="flex items-start gap-4">
+              <img id="posterPreview" class="poster" src="${posterSrc}"/>
+              <div class="flex-1 space-y-2">
+                <input type="file" accept="image/*"
+                  onchange="handleImageUpload(event,'poster')" class="input"/>
+                <div class="small">Same storage note as above.</div>
+
+                ${label("OR Poster URL")}
+                <input id="c_poster" class="input" value="${val(item.poster214x321)}"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- MUX CONFIG -->
+          <div class="card p-4 space-y-3">
+            <div class="font-semibold">Mux Configuration (${type==="series" ? "Series Trailer" : "Trailer + Full Content"})</div>
+            <div class="small">Playback ID enables preview. HLS: <code>https://stream.mux.com/{PLAYBACK_ID}.m3u8</code></div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                ${label("Trailer Asset ID")}
+                <input id="mux_trailer_asset" class="input" value="${val(mux.trailerAssetId)}"/>
+              </div>
+              <div>
+                ${label("Trailer Playback ID")}
+                <input id="mux_trailer_playback" class="input" value="${val(mux.trailerPlaybackId)}"
+                  oninput="renderMuxPreviews('${type}')"/>
+              </div>
+
+              ${type!=="series" ? `
+              <div>
+                ${label("Content Asset ID")}
+                <input id="mux_content_asset" class="input" value="${val(mux.contentAssetId)}"/>
+              </div>
+              <div>
+                ${label("Content Playback ID")}
+                <input id="mux_content_playback" class="input" value="${val(mux.contentPlaybackId)}"
+                  oninput="renderMuxPreviews('${type}')"/>
+              </div>
+              ` : ``}
+            </div>
+
+            <div id="muxPreviews" class="space-y-3"></div>
+          </div>
+
+          <!-- SERIES BLOCK -->
+          ${type==="series" ? `<div id="seriesBlock" class="space-y-3"></div>` : ``}
+
+          <button class="w-full btn btn-primary"
+            onclick="handleSaveContent('${item.mode}','${item.id||""}','${type}')">
+            Save ${titleLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  renderMuxPreviews(type);
+
+  if(type==="series"){
+    if(!tempSeriesDraft){
+      tempSeriesDraft = JSON.parse(JSON.stringify(item));
+      tempSeriesDraft.seasons = tempSeriesDraft.seasons || [];
+    }
+    renderSeriesSeasonsBlock();
+  }
+}
+
+function togglePriceField(){
+  const mono = $("#c_monetization").value;
+  $("#priceWrap").style.display = mono==="tvod" ? "block" : "none";
+}
+
+/* Mux previews */
+function renderMuxPreviews(type){
+  const trailerPid = $("#mux_trailer_playback")?.value.trim();
+  const contentPid = $("#mux_content_playback")?.value.trim();
+  const wrap = $("#muxPreviews");
+  if(!wrap) return;
+
+  const block = (pid, labelTxt) => {
+    if(!pid) return "";
+    const hls = `https://stream.mux.com/${pid}.m3u8`;
+    const thumb = `https://image.mux.com/${pid}/thumbnail.jpg?time=1`;
+    return `
+      <div class="border border-white/10 rounded-xl p-3 bg-black/40 space-y-2">
+        <div class="font-semibold">${labelTxt} Preview</div>
+        <mux-player playback-id="${pid}" style="width:100%; height:220px;"></mux-player>
+        <div class="small">HLS URL: <code>${hls}</code></div>
+        <img src="${thumb}" class="thumb"/>
+      </div>
+    `;
+  };
+
+  wrap.innerHTML =
+    block(trailerPid, "Trailer") +
+    (type!=="series" ? block(contentPid, "Full Content") : "");
+}
+
+/* ==========================================================
+   SERIES → SEASONS → EPISODES UI
+========================================================== */
+function renderSeriesSeasonsBlock(){
+  const el = $("#seriesBlock");
+  if(!el || !tempSeriesDraft) return;
+
+  const seasons = tempSeriesDraft.seasons || [];
+
+  el.innerHTML = `
+    <div class="card p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold text-lg">Seasons</div>
+        <button class="btn btn-ghost text-sm" onclick="addSeason()">+ Add Season</button>
+      </div>
+
+      <div class="space-y-3">
+        ${seasons.length ? seasons
+          .sort((a,b)=>a.seasonNumber-b.seasonNumber)
+          .map(seasonCard).join("")
+        : `<div class="text-sm text-white/60">No seasons yet. Click “Add Season”.</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function seasonCard(s){
+  const eps = s.episodes || [];
+  return `
+    <details class="card p-4 bg-black/40">
+      <summary class="flex items-center justify-between">
+        <div class="font-semibold">
+          Season ${s.seasonNumber}${s.title ? ` — ${escapeHtml(s.title)}` : ""}
+          <span class="small ml-2">(${eps.length} episodes)</span>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-ghost text-xs" onclick="event.preventDefault(); editSeasonPrompt('${s.id}')">Edit</button>
+          <button class="btn btn-danger text-xs" onclick="event.preventDefault(); deleteSeason('${s.id}')">Delete</button>
+        </div>
+      </summary>
+
+      <div class="mt-3 space-y-3">
+        <div class="small">${escapeHtml(s.synopsis||"")}</div>
+
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">Episodes</div>
+          <button class="btn btn-ghost text-xs" onclick="addEpisode('${s.id}')">+ Add Episode</button>
+        </div>
+
+        <div class="space-y-2">
+          ${eps.length ? eps
+            .sort((a,b)=>a.episodeNumber-b.episodeNumber)
+            .map(e=>episodeCard(s.id, e)).join("")
+          : `<div class="text-sm text-white/60">No episodes yet.</div>`}
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function episodeCard(seasonId, e){
+  const trailerPid = e.mux?.trailerPlaybackId || "";
+  const contentPid = e.mux?.contentPlaybackId || "";
+  return `
+    <details class="border border-white/10 rounded-xl p-3 bg-black/30">
+      <summary class="flex items-center justify-between">
+        <div>
+          <span class="font-semibold">Ep ${e.episodeNumber} — ${escapeHtml(e.title||"Untitled")}</span>
+          <span class="small ml-2">${e.runtimeMins ? `${e.runtimeMins} mins` : ""}</span>
+          <span class="small ml-2">${e.isPublished ? "Published" : "Draft"}</span>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-danger text-xs" onclick="event.preventDefault(); deleteEpisode('${seasonId}','${e.id}')">Delete</button>
+        </div>
+      </summary>
+
+      <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="space-y-2">
+          ${label("Episode Number")}
+          <input class="input" type="number" value="${val(e.episodeNumber)}"
+            oninput="updateEpisode('${seasonId}','${e.id}','episodeNumber', this.value)"/>
+
+          ${label("Title")}
+          <input class="input" value="${val(e.title)}"
+            oninput="updateEpisode('${seasonId}','${e.id}','title', this.value)"/>
+
+          ${label("Synopsis")}
+          <textarea class="input textarea"
+            oninput="updateEpisode('${seasonId}','${e.id}','synopsis', this.value)">${val(e.synopsis)}</textarea>
+
+          ${label("Runtime (mins)")}
+          <input class="input" type="number" value="${val(e.runtimeMins)}"
+            oninput="updateEpisode('${seasonId}','${e.id}','runtimeMins', this.value)"/>
+
+          <label class="flex items-center gap-2 text-sm text-white/80 mt-2">
+            <input type="checkbox" ${e.isPublished?"checked":""}
+              onchange="updateEpisode('${seasonId}','${e.id}','isPublished', this.checked)"/>
+            Published
+          </label>
+        </div>
+
+        <div class="space-y-3">
+          <div class="font-semibold">Episode Thumbnail</div>
+          <div class="flex items-start gap-3">
+            <img class="episode-thumb" src="${e.thumbDataUrl||""}"/>
+            <input type="file" class="input" accept="image/*"
+              onchange="handleEpisodeThumbUpload(event,'${seasonId}','${e.id}')"/>
+          </div>
+
+          <div class="font-semibold mt-2">Mux IDs (Episode)</div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            ${label("Trailer Asset ID")}
+            <input class="input" value="${val(e.mux?.trailerAssetId)}"
+              oninput="updateEpisodeMux('${seasonId}','${e.id}','trailerAssetId', this.value)"/>
+
+            ${label("Trailer Playback ID")}
+            <input class="input" value="${val(e.mux?.trailerPlaybackId)}"
+              oninput="updateEpisodeMux('${seasonId}','${e.id}','trailerPlaybackId', this.value); renderEpisodeMuxPreview('${seasonId}','${e.id}')"/>
+
+            ${label("Content Asset ID")}
+            <input class="input" value="${val(e.mux?.contentAssetId)}"
+              oninput="updateEpisodeMux('${seasonId}','${e.id}','contentAssetId', this.value)"/>
+
+            ${label("Content Playback ID")}
+            <input class="input" value="${val(e.mux?.contentPlaybackId)}"
+              oninput="updateEpisodeMux('${seasonId}','${e.id}','contentPlaybackId', this.value); renderEpisodeMuxPreview('${seasonId}','${e.id}')"/>
+          </div>
+
+          <div id="epPreview-${e.id}" class="space-y-2 mt-2">
+            ${episodeMuxPreviewBlock(trailerPid, contentPid)}
+          </div>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function episodeMuxPreviewBlock(trailerPid, contentPid){
+  const block = (pid, labelTxt) => {
+    if(!pid) return "";
+    const hls = `https://stream.mux.com/${pid}.m3u8`;
+    return `
+      <div class="border border-white/10 rounded-lg p-2 bg-black/40">
+        <div class="small font-semibold mb-1">${labelTxt} Preview</div>
+        <mux-player playback-id="${pid}" style="width:100%; height:160px;"></mux-player>
+        <div class="small mt-1">HLS: <code>${hls}</code></div>
+      </div>
+    `;
+  };
+  return block(trailerPid, "Trailer") + block(contentPid, "Episode");
+}
+
+/* Series CRUD */
+async function addSeason(){
+  if(!tempSeriesDraft) return;
+  const seasons = tempSeriesDraft.seasons || [];
+  const nextNum = seasons.length ? Math.max(...seasons.map(s=>s.seasonNumber||0))+1 : 1;
+
+  seasons.push({
+    id: uuid(),
+    seasonNumber: nextNum,
+    title: `Season ${nextNum}`,
+    synopsis:"",
+    episodes:[]
+  });
+  tempSeriesDraft.seasons = seasons;
+  await bumpTotal("seasonsCreated");
+  await logAction("Season Added", `${tempSeriesDraft.title} — Season ${nextNum}`);
+  renderSeriesSeasonsBlock();
+}
+
+function editSeasonPrompt(seasonId){
+  const s = tempSeriesDraft.seasons.find(x=>x.id===seasonId);
+  const num = prompt("Season number:", s.seasonNumber);
+  if(num===null) return;
+  const title = prompt("Season title:", s.title||"");
+  if(title===null) return;
+  const synopsis = prompt("Season synopsis:", s.synopsis||"");
+  if(synopsis===null) return;
+
+  s.seasonNumber = Number(num) || s.seasonNumber;
+  s.title = title;
+  s.synopsis = synopsis;
+  renderSeriesSeasonsBlock();
+}
+
+async function deleteSeason(seasonId){
+  if(!confirm("Delete this season and its episodes?")) return;
+  const s = tempSeriesDraft.seasons.find(x=>x.id===seasonId);
+  tempSeriesDraft.seasons = (tempSeriesDraft.seasons||[]).filter(se=>se.id!==seasonId);
+  await bumpTotal("seasonsDeleted");
+  await logAction("Season Deleted", `${tempSeriesDraft.title} — ${s?.title || "Season"}`);
+  renderSeriesSeasonsBlock();
+}
+
+async function addEpisode(seasonId){
+  const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
+  season.episodes = season.episodes || [];
+
+  const nextEp = season.episodes.length
+    ? Math.max(...season.episodes.map(e=>e.episodeNumber||0))+1
+    : 1;
+
+  season.episodes.push({
+    id: uuid(),
+    episodeNumber: nextEp,
+    title: `Episode ${nextEp}`,
+    synopsis:"",
+    runtimeMins: null,
+    isPublished:false,
+    thumbDataUrl:"",
+    mux:{
+      trailerAssetId:"",
+      trailerPlaybackId:"",
+      contentAssetId:"",
+      contentPlaybackId:""
+    }
+  });
+  await bumpTotal("episodesCreated");
+  await logAction("Episode Added", `${tempSeriesDraft.title} — S${season.seasonNumber}E${nextEp}`);
+  renderSeriesSeasonsBlock();
+}
+
+async function deleteEpisode(seasonId, epId){
+  if(!confirm("Delete this episode?")) return;
+  const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
+  const ep = season.episodes.find(e=>e.id===epId);
+  season.episodes = (season.episodes||[]).filter(e=>e.id!==epId);
+  await bumpTotal("episodesDeleted");
+  await logAction("Episode Deleted", `${tempSeriesDraft.title} — ${ep?.title||"Episode"}`);
+  renderSeriesSeasonsBlock();
+}
+
+function updateEpisode(seasonId, epId, field, value){
+  const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
+  const ep = season.episodes.find(e=>e.id===epId);
+  if(field==="episodeNumber" || field==="runtimeMins"){
+    ep[field] = numOrUndef(value);
+  } else {
+    ep[field] = value;
+  }
+}
+function updateEpisodeMux(seasonId, epId, field, value){
+  const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
+  const ep = season.episodes.find(e=>e.id===epId);
+  ep.mux = ep.mux || {};
+  ep.mux[field] = value.trim();
+}
+function renderEpisodeMuxPreview(seasonId, epId){
+  const season = tempSeriesDraft.seasons.find(s=>s.id===seasonId);
+  const ep = season.episodes.find(e=>e.id===epId);
+  const el = $(`#epPreview-${epId}`);
+  if(!el) return;
+  el.innerHTML = episodeMuxPreviewBlock(ep.mux?.trailerPlaybackId, ep.mux?.contentPlaybackId);
+}
+
+/* Save title */
+async function handleSaveContent(mode, id, type){
+  const title = $("#c_title").value.trim();
+  if(!title){ alert("Title required."); return; }
+
+  const all = await getContent();
+  const old = mode==="edit" ? all.find(c=>c.id===id) : null;
+  const createdAt = old?.createdAt || nowIso();
+  const updatedAt = nowIso();
+  const monetization = $("#c_monetization").value;
+
+  const baseItem = {
+    id: mode==="edit" ? id : uuid(),
+    type,
+    title,
+    synopsis: $("#c_synopsis").value.trim(),
+    genre: $("#c_genre").value.split(",").map(x=>x.trim()).filter(Boolean),
+    releaseYear: numOrUndef($("#c_year").value),
+    heroImage1920x1080: $("#c_hero")?.value.trim() || "",
+    poster214x321: $("#c_poster")?.value.trim() || "",
+    heroImageDataUrl: tempImages.hero ?? old?.heroImageDataUrl ?? "",
+    posterImageDataUrl: tempImages.poster ?? old?.posterImageDataUrl ?? "",
+    monetization,
+    priceUSD: monetization==="tvod" ? numOrUndef($("#c_price")?.value) : undefined,
+    isPublished: $("#c_published").checked,
+    createdAt,
+    updatedAt
+  };
+
+  if(type==="series"){
+    baseItem.mux = {
+      trailerAssetId: $("#mux_trailer_asset").value.trim(),
+      trailerPlaybackId: $("#mux_trailer_playback").value.trim()
+    };
+    baseItem.seasons = tempSeriesDraft?.seasons || old?.seasons || [];
+  } else {
+    baseItem.runtimeMins = numOrUndef($("#c_runtime").value);
+    baseItem.mux = {
+      trailerAssetId: $("#mux_trailer_asset").value.trim(),
+      trailerPlaybackId: $("#mux_trailer_playback").value.trim(),
+      contentAssetId: $("#mux_content_asset").value.trim(),
+      contentPlaybackId: $("#mux_content_playback").value.trim()
+    };
+  }
+
+  await upsertContent(baseItem, mode==="new" ? "new" : "edit");
+  tempSeriesDraft = null;
+  location.hash = `#/content/${type}`;
+}
+
+async function handleDeleteContent(id, type){
+  if(!confirm("Delete this title?")) return;
+  await deleteContent(id);
+  renderContentList(type);
+}
+
+/* ==========================================================
+   Users page (unchanged)
+========================================================== */
+async function renderUsers(){ /* same as before */
+  const users = await getUsers();
+  $("#app").innerHTML = `
+    <div class="card p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+      <input id="u_name" class="input" placeholder="Name"/>
+      <input id="u_email" class="input" placeholder="Email"/>
+      <input id="u_pass" class="input" placeholder="Temp Password"/>
+      <select id="u_role" class="input">
+        <option value="admin">Admin</option>
+        <option value="editor">Editor</option>
+        <option value="viewer" selected>Viewer</option>
+      </select>
+      <button class="btn btn-primary" onclick="handleAddUser()">Add User</button>
+    </div>
+
+    <div class="rounded-2xl border border-white/10 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-white/5 text-white/70">
+          <tr>
+            <th class="p-3 text-left">Name</th>
+            <th class="p-3 text-left">Email</th>
+            <th class="p-3 text-left">Role</th>
+            <th class="p-3 text-left">Active</th>
+            <th class="p-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map(u=>userRow(u)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+function userRow(u){
+  return `
+    <tr class="border-t border-white/5">
+      <td class="p-3">${escapeHtml(u.name)}</td>
+      <td class="p-3">${escapeHtml(u.email)}</td>
+      <td class="p-3 capitalize">${u.role}</td>
+      <td class="p-3">${u.isActive?"Yes":"No"}</td>
+      <td class="p-3 text-right">
+        <button class="btn btn-ghost text-xs mr-2" onclick="toggleUserActive('${u.id}')">${u.isActive?"Disable":"Enable"}</button>
+        <button class="btn btn-danger text-xs" onclick="removeUser('${u.id}')">Remove</button>
+      </td>
+    </tr>
+  `;
+}
+async function handleAddUser(){
+  const name = $("#u_name").value.trim();
+  const email = $("#u_email").value.trim();
+  const password = $("#u_pass").value.trim();
+  const role = $("#u_role").value;
+  if(!name || !email || !password){ alert("Name, Email, Password required."); return; }
+  const users = await getUsers();
+  users.unshift({ id: uuid(), name, email, password, role, isActive:true, createdAt: nowIso() });
+  await saveUsers(users);
+  await logAction("User Added", `${name} (${role})`);
+  renderUsers();
+}
+async function toggleUserActive(id){
+  const users = (await getUsers()).map(u=>u.id===id ? {...u, isActive:!u.isActive} : u);
+  await saveUsers(users);
+  await logAction("User Toggled", id);
+  renderUsers();
+}
+async function removeUser(id){
+  if(!confirm("Remove this user?")) return;
+  const users = (await getUsers()).filter(u=>u.id!==id);
+  await saveUsers(users);
+  await logAction("User Removed", id);
+  renderUsers();
+}
+
+/* ==========================================================
+   Loop Channel (unchanged)
+========================================================== */
+async function renderLoopChannel(){
+  const settings = await getLoopSettings();
+  const content = await getContent();
+
+  $("#app").innerHTML = `
+    <div class="card p-4 space-y-3">
+      ${label("Channel Name")}
+      <input id="l_name" class="input" value="${val(settings.channelName)}"/>
+
+      <label class="flex items-center gap-2 text-sm text-white/80">
+        <input id="l_live" type="checkbox" ${settings.isLive?"checked":""}/>
+        Channel Live
+      </label>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          ${label("Start Time (ISO)")}
+          <input id="l_start" class="input" placeholder="2025-01-01T09:00:00Z" value="${val(settings.startTime)}"/>
+        </div>
+        <div>
+          ${label("End Time (ISO)")}
+          <input id="l_end" class="input" placeholder="2025-01-01T23:00:00Z" value="${val(settings.endTime)}"/>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="saveLoop()">Save Channel</button>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Rotation Titles</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        ${content.length
+          ? content.map(c=>rotationRow(c, settings.rotationTitleIds)).join("")
+          : `<div class="text-white/60 text-sm">Add titles first.</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+function rotationRow(c, rotationIds){
+  const checked = rotationIds.includes(c.id) ? "checked" : "";
+  return `
+    <label class="flex items-center justify-between bg-black/40 border border-white/5 rounded-xl p-3">
+      <span>${escapeHtml(c.title)}</span>
+      <input type="checkbox" ${checked} onchange="toggleRotation('${c.id}')"/>
+    </label>
+  `;
+}
+async function toggleRotation(id){
+  const settings = await getLoopSettings();
+  const ids = new Set(settings.rotationTitleIds || []);
+  if(ids.has(id)) ids.delete(id); else ids.add(id);
+  settings.rotationTitleIds = [...ids];
+  await saveLoopSettings(settings);
+}
+async function saveLoop(){
+  const settings = await getLoopSettings();
+  settings.channelName = $("#l_name").value.trim();
+  settings.isLive = $("#l_live").checked;
+  settings.startTime = $("#l_start").value.trim();
+  settings.endTime = $("#l_end").value.trim();
+  await saveLoopSettings(settings);
+  await logAction("Loop Saved", settings.channelName);
+  alert("Loop channel settings saved.");
+  renderLoopChannel();
+}
+
+/* ==========================================================
+   Ads & Payments
+========================================================== */
+async function renderAds(){
+  const ads = await getAdsSettings();
+  $("#app").innerHTML = `
+    <div class="card p-6 space-y-3">
+      ${label("GAM Network Code")}
+      <input id="a_gam" class="input" placeholder="1234567" value="${val(ads.gamNetworkCode)}"/>
+      ${label("VAST Tag URL")}
+      <input id="a_vast" class="input" placeholder="https://pubads.g.doubleclick.net/...vast.xml" value="${val(ads.vastTagUrl)}"/>
+      <button class="btn btn-primary" onclick="saveAds()">Save Ads Settings</button>
+    </div>
+  `;
+}
+async function saveAds(){
+  const ads = {
+    gamNetworkCode: $("#a_gam").value.trim(),
+    vastTagUrl: $("#a_vast").value.trim()
+  };
+  await saveAdsSettings(ads);
+  await logAction("Ads Saved", "GAM/VAST");
+  alert("Ads settings saved.");
+}
+
+let paypalSdkEl = null;
+
+async function renderPayments(){
+  const app = $("#app");
+  const p = await getPaymentsSettings();
+
+  app.innerHTML = `
+    <div class="card p-6 space-y-4">
+      <h2 class="text-lg font-semibold">Payment Gateway — PayPal</h2>
+
+      <div class="text-sm text-white/70">
+        Store only your <b>PayPal Client ID</b> here.  
+        <b>Do NOT enter Client Secret in the CMS.</b>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="space-y-2">
+          ${label("PayPal Client ID (public)")}
+          <input id="pp_client" class="input" placeholder="AQ...your_client_id..." value="${val(p.paypalClientId)}" />
+        </div>
+        <div class="space-y-2">
+          ${label("Environment")}
+          <select id="pp_env" class="input">
+            <option value="sandbox" ${p.paypalEnv==="sandbox"?"selected":""}>Sandbox (testing)</option>
+            <option value="live" ${p.paypalEnv==="live"?"selected":""}>Live (production)</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn btn-primary w-full md:w-auto" onclick="handleSavePayments()">
+        Save PayPal Settings
+      </button>
+
+      <hr class="border-white/10"/>
+
+      <div class="space-y-2">
+        <div class="font-semibold">PayPal Test Checkout</div>
+        <div id="paypal-button-container" class="mt-2"></div>
+        <div id="paypal-status" class="text-sm text-white/70"></div>
+        <button class="btn btn-ghost text-sm" onclick="renderPayPalTestButton()">
+          Load / Refresh Test Button
+        </button>
+      </div>
+    </div>
+  `;
+
+  if(p.paypalClientId){
+    renderPayPalTestButton();
+  }
+}
+async function handleSavePayments(){
+  const settings = {
+    paypalClientId: $("#pp_client").value.trim(),
+    paypalEnv: $("#pp_env").value
+  };
+  await savePaymentsSettings(settings);
+  await logAction("Payments Saved", settings.paypalEnv);
+  alert("PayPal settings saved.");
+  renderPayments();
+}
+
+async function renderPayPalTestButton(){
+  const p = await getPaymentsSettings();
+  const status = $("#paypal-status");
+  const container = $("#paypal-button-container");
+
+  container.innerHTML = "";
+  status.textContent = "";
+
+  if(!p.paypalClientId){
+    status.textContent = "Add and save a PayPal Client ID first.";
+    return;
+  }
+
+  await ensurePayPalSDK(p.paypalClientId);
+
+  if(typeof paypal === "undefined"){
+    status.textContent = "PayPal SDK failed to load. Check your Client ID.";
+    return;
+  }
+
+  paypal.Buttons({
+    createOrder: async () => {
+      const res = await fetch("/api/paypal/create-order", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ amount:"5.99", description:"WatchVIM Test Purchase" })
+      });
+      const data = await res.json();
+      return data.id;
+    },
+    onApprove: async (data) => {
+      const res = await fetch("/api/paypal/capture-order", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ orderID: data.orderID })
+      });
+      const details = await res.json();
+      status.textContent = "Payment captured ✅ Order: " + details.id;
+    },
+    onError: () => {
+      status.textContent = "PayPal error. Check /api endpoints + Vercel env vars.";
+    }
+  }).render("#paypal-button-container");
+}
+
+function ensurePayPalSDK(clientId){
+  return new Promise((resolve) => {
+    if(paypalSdkEl){
+      paypalSdkEl.remove();
+      paypalSdkEl = null;
+      window.paypal = undefined;
+    }
+    paypalSdkEl = document.createElement("script");
+    paypalSdkEl.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(clientId)}&currency=USD`;
+    paypalSdkEl.onload = () => resolve();
+    paypalSdkEl.onerror = () => resolve();
+    document.body.appendChild(paypalSdkEl);
+  });
+}
+
+/* ==========================================================
+   Boot
+========================================================== */
+renderShell();
+</script>
+</body>
+</html>
