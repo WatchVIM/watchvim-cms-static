@@ -302,7 +302,31 @@ function seedUsers(){
   ];
 }
 function seedAds(){ return { gamNetworkCode:"", vastTagUrl:"", prerollEnabled:true, midrollEnabled:false, postrollEnabled:false }; }
-function seedLoop(){ return { channelName:"WatchVIM Live Loop", isLive:false, startTime:"", endTime:"", rotationTitleIds:[] }; }
+function seedLoop(){
+  return {
+    channelName: "WatchVIM Live Loop",
+    isLive: false,
+    startTime: "",
+    endTime: "",
+
+    // NEW: items can be films/docs OR specific episodes
+    rotationItems: [
+      // example:
+      // { id: uuid(), kind:"title", titleId:"seed-film-1" },
+      // { id: uuid(), kind:"episode", seriesId:"seed-series-1", seasonId:"seed-season-1", episodeId:"seed-ep-1" }
+    ],
+
+    // NEW: sponsored ad videos (Blob URLs)
+    sponsoredAds: [
+      // example:
+      // { id: uuid(), name:"Sponsor Ad 1", url:"https://...blob...mp4", durationSec:15, isActive:true }
+    ],
+
+    // NEW: play an ad every N loop items
+    adFrequency: 3, // after every 3 items, insert 1 ad
+  };
+}
+
 function seedPayments(){ return { paypalClientId:"", paypalEnv:"sandbox" }; }
 
 /* ---------------- Data layer ---------------- */
@@ -754,6 +778,72 @@ function option(value, selected){
    HERO/POSTER UPLOAD → Vercel Blob
 ========================================================== */
 async function handleImageUpload(evt, kind){
+/* ==========================================================
+   LOOP CHANNEL — Sponsored Ad Upload (video to Blob)
+   Uses existing /api/upload route.
+========================================================== */
+async function handleSponsoredAdUpload(evt){
+  const file = evt.target.files?.[0];
+  if(!file) return;
+
+  const settings = await getLoopSettings();
+
+  const safeName = file.name.replace(/\s+/g, "-");
+  const res = await fetch(`/api/upload?filename=${encodeURIComponent(safeName)}`, {
+    method: "POST",
+    body: file
+  });
+  const data = await res.json();
+
+  if(!res.ok){
+    alert("Ad video upload failed: " + (data.error || "unknown error"));
+    return;
+  }
+
+  settings.sponsoredAds = settings.sponsoredAds || [];
+  settings.sponsoredAds.unshift({
+    id: uuid(),
+    name: file.name,
+    url: data.url,
+    durationSec: 15,    // default; you can edit in UI
+    isActive: true,
+    createdAt: nowIso()
+  });
+
+  await saveLoopSettings(settings);
+  await logAction("Sponsored Ad Uploaded", file.name);
+
+  renderLoopChannel();
+}
+
+async function removeSponsoredAd(adId){
+  const settings = await getLoopSettings();
+  settings.sponsoredAds = (settings.sponsoredAds || []).filter(a=>a.id!==adId);
+  await saveLoopSettings(settings);
+  await logAction("Sponsored Ad Removed", adId);
+  renderLoopChannel();
+}
+
+async function toggleSponsoredAd(adId){
+  const settings = await getLoopSettings();
+  settings.sponsoredAds = (settings.sponsoredAds || []).map(a=>
+    a.id===adId ? {...a, isActive: !a.isActive} : a
+  );
+  await saveLoopSettings(settings);
+  renderLoopChannel();
+}
+
+async function updateSponsoredAdField(adId, field, value){
+  const settings = await getLoopSettings();
+  settings.sponsoredAds = (settings.sponsoredAds || []).map(a=>{
+    if(a.id!==adId) return a;
+    if(field==="durationSec") return {...a, durationSec: Number(value)||0};
+    if(field==="name") return {...a, name: value};
+    return a;
+  });
+  await saveLoopSettings(settings);
+}
+
   const file = evt.target.files?.[0];
   if(!file) return;
 
@@ -1388,12 +1478,19 @@ async function removeUser(id){
   renderUsers();
 }
 
-/* ---------------- Loop Channel ---------------- */
+/* ==========================================================
+   LOOP CHANNEL — Drilldown + Episodic Rotation + Sponsored Ads
+========================================================== */
+
 async function renderLoopChannel(){
   const settings = await getLoopSettings();
   const content = await getContent();
 
+  const rotationItems = settings.rotationItems || [];
+  const ads = settings.sponsoredAds || [];
+
   $("#app").innerHTML = `
+    <!-- CHANNEL SETTINGS CARD -->
     <div class="card p-4 space-y-3">
       ${label("Channel Name")}
       <input id="l_name" class="input" value="${val(settings.channelName)}"/>
@@ -1414,51 +1511,268 @@ async function renderLoopChannel(){
         </div>
       </div>
 
+      <div>
+        ${label("Ad Frequency (insert 1 ad every N items)")}
+        <input id="l_ad_freq" class="input w-[140px]" type="number" min="0" value="${val(settings.adFrequency ?? 3)}"/>
+        <div class="small mt-1">Set to 0 to disable ads in loop.</div>
+      </div>
+
       <button class="btn btn-primary" onclick="saveLoop()">Save Channel</button>
     </div>
 
-    <div class="card p-4">
-      <h3 class="font-semibold mb-2">Rotation Titles</h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-        ${
-          content.length
-            ? content.map(c=>rotationRow(c, settings.rotationTitleIds)).join("")
-            : `<div class="text-white/60 text-sm">Add titles first.</div>`
-        }
+    <!-- CURRENT ROTATION LIST -->
+    <div class="card p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold">Current Loop Rotation</h3>
+        <div class="small">${rotationItems.length} items</div>
+      </div>
+
+      ${rotationItems.length ? `
+        <div class="space-y-2">
+          ${rotationItems.map((ri, idx)=>rotationItemRow(ri, idx)).join("")}
+        </div>
+      ` : `<div class="text-white/60 text-sm">No rotation items selected yet.</div>`}
+    </div>
+
+    <!-- CONTENT PICKER WITH DRILLDOWN -->
+    <div class="card p-4 space-y-3">
+      <h3 class="font-semibold">Add Titles / Episodes to Rotation</h3>
+      <div class="space-y-3">
+        ${content.length ? content.map(c=>contentPickerRow(c, rotationItems)).join("") 
+                         : `<div class="text-white/60 text-sm">Add titles first.</div>`}
+      </div>
+    </div>
+
+    <!-- SPONSORED ADS -->
+    <div class="card p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold">Sponsored Ads (Video)</h3>
+        <div class="small">${ads.filter(a=>a.isActive).length} active</div>
+      </div>
+
+      <input type="file" accept="video/*" class="input"
+        onchange="handleSponsoredAdUpload(event)" />
+
+      ${ads.length ? `
+        <div class="space-y-2 mt-2">
+          ${ads.map(a=>sponsoredAdRow(a)).join("")}
+        </div>
+      ` : `<div class="text-white/60 text-sm mt-2">No ads uploaded yet.</div>`}
+    </div>
+  `;
+}
+
+/* ---------- Rotation list rows ---------- */
+function rotationItemRow(ri, idx){
+  const labelTxt = describeRotationItem(ri);
+  return `
+    <div class="flex items-center justify-between bg-black/40 border border-white/5 rounded-xl p-3">
+      <div>
+        <div class="font-semibold text-sm">${escapeHtml(labelTxt)}</div>
+        <div class="small">${ri.kind}</div>
+      </div>
+
+      <div class="flex gap-2">
+        <button class="btn btn-ghost text-xs" onclick="moveRotationItem('${ri.id}', -1)">↑</button>
+        <button class="btn btn-ghost text-xs" onclick="moveRotationItem('${ri.id}', 1)">↓</button>
+        <button class="btn btn-danger text-xs" onclick="removeRotationItem('${ri.id}')">Remove</button>
       </div>
     </div>
   `;
 }
 
-function rotationRow(c, rotationIds){
-  const checked = rotationIds.includes(c.id) ? "checked" : "";
+async function moveRotationItem(itemId, dir){
+  const settings = await getLoopSettings();
+  const items = settings.rotationItems || [];
+  const i = items.findIndex(x=>x.id===itemId);
+  if(i<0) return;
+
+  const j = i + dir;
+  if(j<0 || j>=items.length) return;
+
+  [items[i], items[j]] = [items[j], items[i]];
+  settings.rotationItems = items;
+  await saveLoopSettings(settings);
+  renderLoopChannel();
+}
+
+async function removeRotationItem(itemId){
+  const settings = await getLoopSettings();
+  settings.rotationItems = (settings.rotationItems||[]).filter(x=>x.id!==itemId);
+  await saveLoopSettings(settings);
+  renderLoopChannel();
+}
+
+/* ---------- Content picker with drilldown ---------- */
+function contentPickerRow(c, rotationItems){
+  // Non-series: simple checkbox
+  if(c.type !== "series"){
+    const checked = rotationItems.some(ri => ri.kind==="title" && ri.titleId===c.id);
+    return `
+      <label class="flex items-center justify-between bg-black/40 border border-white/5 rounded-xl p-3">
+        <span>${escapeHtml(c.title)} <span class="small ml-2">(${c.type})</span></span>
+        <input type="checkbox" ${checked?"checked":""}
+          onchange="toggleRotationTitle('${c.id}', this.checked)"/>
+      </label>
+    `;
+  }
+
+  // Series: drilldown to seasons/episodes
+  const seasons = c.seasons || [];
+
   return `
-    <label class="flex items-center justify-between bg-black/40 border border-white/5 rounded-xl p-3">
-      <span>${escapeHtml(c.title)}</span>
-      <input type="checkbox" ${checked} onchange="toggleRotation('${c.id}')"/>
-    </label>
+    <details class="bg-black/40 border border-white/5 rounded-xl p-3">
+      <summary class="flex items-center justify-between">
+        <span>${escapeHtml(c.title)} <span class="small ml-2">(series)</span></span>
+        <span class="small">${seasons.length} seasons</span>
+      </summary>
+
+      <div class="mt-3 space-y-3 pl-2">
+        ${seasons.map(s=>{
+          const eps = s.episodes || [];
+          return `
+            <details class="bg-black/30 border border-white/5 rounded-xl p-3">
+              <summary class="flex items-center justify-between">
+                <span>Season ${s.seasonNumber} — ${escapeHtml(s.title||"")}</span>
+                <span class="small">${eps.length} eps</span>
+              </summary>
+
+              <div class="mt-2 space-y-2 pl-2">
+                ${eps.map(e=>{
+                  const checked = rotationItems.some(ri =>
+                    ri.kind==="episode" &&
+                    ri.seriesId===c.id &&
+                    ri.seasonId===s.id &&
+                    ri.episodeId===e.id
+                  );
+                  return `
+                    <label class="flex items-center justify-between bg-black/20 border border-white/5 rounded-lg p-2">
+                      <span>
+                        Ep ${e.episodeNumber} — ${escapeHtml(e.title||"Episode")}
+                        <span class="small ml-1">${e.runtimeMins?`${e.runtimeMins}m`:""}</span>
+                      </span>
+                      <input type="checkbox" ${checked?"checked":""}
+                        onchange="toggleRotationEpisode('${c.id}','${s.id}','${e.id}', this.checked)"/>
+                    </label>
+                  `;
+                }).join("")}
+              </div>
+            </details>
+          `;
+        }).join("")}
+      </div>
+    </details>
   `;
 }
-async function toggleRotation(id){
+
+async function toggleRotationTitle(titleId, isOn){
   const settings = await getLoopSettings();
-  const ids = new Set(settings.rotationTitleIds || []);
-  if(ids.has(id)) ids.delete(id); else ids.add(id);
-  settings.rotationTitleIds = [...ids];
+  const items = settings.rotationItems || [];
+
+  if(isOn){
+    items.push({ id: uuid(), kind:"title", titleId });
+  } else {
+    settings.rotationItems = items.filter(x=>!(x.kind==="title" && x.titleId===titleId));
+  }
+
+  settings.rotationItems = items;
   await saveLoopSettings(settings);
+  renderLoopChannel();
 }
+
+async function toggleRotationEpisode(seriesId, seasonId, episodeId, isOn){
+  const settings = await getLoopSettings();
+  const items = settings.rotationItems || [];
+
+  if(isOn){
+    items.push({ id: uuid(), kind:"episode", seriesId, seasonId, episodeId });
+  } else {
+    settings.rotationItems = items.filter(x=>!(
+      x.kind==="episode" &&
+      x.seriesId===seriesId &&
+      x.seasonId===seasonId &&
+      x.episodeId===episodeId
+    ));
+  }
+
+  settings.rotationItems = items;
+  await saveLoopSettings(settings);
+  renderLoopChannel();
+}
+
+/* ---------- Helper to label items ---------- */
+function describeRotationItem(ri){
+  const content = safeParse(localStorage.getItem(KEYS.content), seedContent());
+
+  if(ri.kind==="title"){
+    const t = content.find(x=>x.id===ri.titleId);
+    return t ? `${t.title} (${t.type})` : `Unknown title (${ri.titleId})`;
+  }
+
+  if(ri.kind==="episode"){
+    const series = content.find(x=>x.id===ri.seriesId);
+    const season = series?.seasons?.find(s=>s.id===ri.seasonId);
+    const ep = season?.episodes?.find(e=>e.id===ri.episodeId);
+    if(series && season && ep){
+      return `${series.title} — S${season.seasonNumber}E${ep.episodeNumber} ${ep.title||""}`.trim();
+    }
+    return `Unknown episode (${ri.episodeId})`;
+  }
+
+  return "Unknown Item";
+}
+
+/* ---------- Sponsored ads rows ---------- */
+function sponsoredAdRow(a){
+  return `
+    <div class="bg-black/40 border border-white/5 rounded-xl p-3 space-y-2">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold text-sm">${escapeHtml(a.name||"Ad")}</div>
+        <div class="flex items-center gap-2">
+          <label class="small flex items-center gap-1">
+            <input type="checkbox" ${a.isActive?"checked":""} onchange="toggleSponsoredAd('${a.id}')"/>
+            Active
+          </label>
+          <button class="btn btn-danger text-xs" onclick="removeSponsoredAd('${a.id}')">Remove</button>
+        </div>
+      </div>
+
+      <video src="${a.url}" controls class="w-full rounded-lg border border-white/10 bg-black"></video>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div>
+          ${label("Ad Name")}
+          <input class="input" value="${escapeHtml(a.name||"")}"
+            oninput="updateSponsoredAdField('${a.id}', 'name', this.value)"/>
+        </div>
+        <div>
+          ${label("Duration (sec)")}
+          <input class="input" type="number" min="1" value="${val(a.durationSec||0)}"
+            oninput="updateSponsoredAdField('${a.id}', 'durationSec', this.value)"/>
+        </div>
+      </div>
+
+      <div class="small">Blob URL: <code>${a.url}</code></div>
+    </div>
+  `;
+}
+
+/* ---------- Save channel ---------- */
 async function saveLoop(){
   const settings = await getLoopSettings();
   settings.channelName = $("#l_name").value.trim();
   settings.isLive = $("#l_live").checked;
   settings.startTime = $("#l_start").value.trim();
   settings.endTime = $("#l_end").value.trim();
-  await saveLoopSettings(settings);
+  settings.adFrequency = Number($("#l_ad_freq").value || 0);
 
+  await saveLoopSettings(settings);
   await logAction("Loop Saved", settings.channelName);
 
   alert("Loop channel settings saved.");
   renderLoopChannel();
 }
+
 
 /* ---------------- Ads ---------------- */
 async function renderAds(){
