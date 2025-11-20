@@ -837,4 +837,102 @@ async function renderLoopChannel(){
 
 function rotationRow(c, rotationIds){
   const checked = rotationIds.includes(c.id) ? "checked" : "";
-  return
+  return `
+    <label class="flex items-center justify-between bg-black/40 border border-white/5 rounded-xl p-3">
+      <span>${escapeHtml(c.title)}</span>
+      <input type="checkbox" ${checked} onchange="toggleRotation('${c.id}')"/>
+    </label>
+  `;
+}
+
+async function toggleRotation(id){
+  const settings = await getLoopSettings();
+  const ids = new Set(settings.rotationTitleIds || []);
+  if(ids.has(id)) ids.delete(id); else ids.add(id);
+  settings.rotationTitleIds = [...ids];
+  await saveLoopSettings(settings);
+}
+
+async function saveLoop(){
+  const settings = await getLoopSettings();
+  settings.channelName = $("#l_name").value.trim();
+  settings.isLive = $("#l_live").checked;
+  settings.startTime = $("#l_start").value.trim();
+  settings.endTime = $("#l_end").value.trim();
+  await saveLoopSettings(settings);
+  alert("Loop channel settings saved.");
+  renderLoopChannel();
+}
+
+/* ---------- Ads (Admin-only) ---------- */
+async function renderAds(){
+  const app = $("#app");
+  const ads = await getAdsSettings();
+
+  app.innerHTML = `
+    <div class="card p-6 space-y-3">
+      ${label("GAM Network Code")}
+      <input id="a_gam" class="input" placeholder="1234567" value="${val(ads.gamNetworkCode)}"/>
+
+      ${label("VAST Tag URL")}
+      <input id="a_vast" class="input" placeholder="https://pubads.g.doubleclick.net/...vast.xml" value="${val(ads.vastTagUrl)}"/>
+
+      <div class="flex flex-col gap-2 pt-2">
+        ${toggleRow("a_pre", ads.prerollEnabled, "Enable Pre-Roll")}
+        ${toggleRow("a_mid", ads.midrollEnabled, "Enable Mid-Roll")}
+        ${toggleRow("a_post", ads.postrollEnabled, "Enable Post-Roll")}
+      </div>
+
+      <button class="btn btn-primary" onclick="saveAds()">Save Ads Settings</button>
+    </div>
+  `;
+}
+
+function toggleRow(id, checked, labelTxt){
+  return `
+    <label class="flex items-center gap-2 text-sm text-white/80">
+      <input id="${id}" type="checkbox" ${checked?"checked":""}/>
+      ${labelTxt}
+    </label>
+  `;
+}
+
+async function saveAds(){
+  const ads = {
+    gamNetworkCode: $("#a_gam").value.trim(),
+    vastTagUrl: $("#a_vast").value.trim(),
+    prerollEnabled: $("#a_pre").checked,
+    midrollEnabled: $("#a_mid").checked,
+    postrollEnabled: $("#a_post").checked
+  };
+  await saveAdsSettings(ads);
+  alert("Ads settings saved.");
+}
+
+/* ---------- Payments (Admin-only) ---------- */
+function renderPayments(){
+  const app = $("#app");
+  app.innerHTML = `
+    <div class="card p-6 space-y-2">
+      <p class="text-white/80 text-sm">
+        Stripe/PayPal wiring placeholder. Add these in Vercel Environment Variables later:
+      </p>
+      <ul class="list-disc pl-5 text-sm text-white/60">
+        <li>STRIPE_SECRET_KEY</li>
+        <li>NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY</li>
+        <li>PAYPAL_CLIENT_ID (optional)</li>
+      </ul>
+      <p class="text-xs text-white/50 mt-2">
+        This static build is safe until backend integration.
+      </p>
+    </div>
+  `;
+}
+
+/* ==========================================================
+   BOOT
+========================================================== */
+renderShell();
+</script>
+</body>
+</html>
