@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>WatchVIM CMS Portal</title>
 
-  <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Mux Player for previews -->
   <script src="https://cdn.jsdelivr.net/npm/@mux/mux-player" defer></script>
 
   <script>
@@ -74,8 +71,6 @@
     .small { font-size: 12px; color: rgba(255,255,255,0.6); }
     code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 6px; }
     details summary { cursor:pointer; }
-
-    /* simple bar for dashboard */
     .bar {
       height: 10px; border-radius: 999px; background: rgba(255,255,255,0.08);
       overflow: hidden;
@@ -90,7 +85,7 @@
 <script>
 /* ==========================================================
    WatchVIM CMS — Single-file SPA
-   + Image Uploads
+   + Vercel Blob image uploads (hero/poster)
    + Series → Seasons → Episodes drilldown
    + Mux per title & per episode
    + PayPal settings UI (client-id only)
@@ -132,28 +127,21 @@ function val(v){ return v==null ? "" : String(v); }
 function numOrUndef(v){ const n = Number(v); return Number.isFinite(n) && v!=="" ? n : undefined; }
 function label(t){ return `<label class="text-sm text-white/70">${t}</label>`; }
 
-/* temp images for title-level uploads */
+/* temp images now store BLOB URLs */
 let tempImages = { hero:null, poster:null };
-
-/* temp draft for series nested editing */
 let tempSeriesDraft = null;
 
 /* ==========================================================
    SECTION-SCOPED BACK (no history)
 ========================================================== */
 function getParentSectionRoute(hash){
-  // Content sections
   if(hash.startsWith("#/content/films")) return "#/content/films";
   if(hash.startsWith("#/content/series")) return "#/content/series";
   if(hash.startsWith("#/content/documentaries")) return "#/content/documentaries";
-
-  // Admin/Settings sections
   if(hash.startsWith("#/users")) return "#/users";
   if(hash.startsWith("#/loop-channel")) return "#/loop-channel";
   if(hash.startsWith("#/settings/ads")) return "#/settings/ads";
   if(hash.startsWith("#/settings/payments")) return "#/settings/payments";
-
-  // Default
   return "#/dashboard";
 }
 function goBackSection(){
@@ -169,13 +157,9 @@ function goTo(hash){
 function seedAnalytics(){
   return {
     totals: {
-      titlesCreated:0,
-      titlesEdited:0,
-      titlesDeleted:0,
-      seasonsCreated:0,
-      seasonsDeleted:0,
-      episodesCreated:0,
-      episodesDeleted:0
+      titlesCreated:0, titlesEdited:0, titlesDeleted:0,
+      seasonsCreated:0, seasonsDeleted:0,
+      episodesCreated:0, episodesDeleted:0
     },
     dailyEdits: {},
     lastActions: []
@@ -285,11 +269,9 @@ function seedPayments(){ return { paypalClientId:"", paypalEnv:"sandbox" }; }
 
 /* ---------------- Data layer ---------------- */
 async function getContent(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.content), seedContent());
 }
 async function saveContent(items){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.content, JSON.stringify(items));
 }
 async function upsertContent(item, modeHint="edit"){
@@ -314,35 +296,27 @@ async function deleteContent(id){
   if(removed) await logAction("Title Deleted", `${removed.type}: ${removed.title}`);
 }
 async function getUsers(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.users), seedUsers());
 }
 async function saveUsers(items){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.users, JSON.stringify(items));
 }
 async function getAdsSettings(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.ads), seedAds());
 }
 async function saveAdsSettings(settings){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.ads, JSON.stringify(settings));
 }
 async function getLoopSettings(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.loop), seedLoop());
 }
 async function saveLoopSettings(settings){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.loop, JSON.stringify(settings));
 }
 async function getPaymentsSettings(){
-  if(CONFIG.useBackend){ /* backend later */ }
   return safeParse(localStorage.getItem(KEYS.payments), seedPayments());
 }
 async function savePaymentsSettings(settings){
-  if(CONFIG.useBackend){ /* backend later */ }
   localStorage.setItem(KEYS.payments, JSON.stringify(settings));
 }
 
@@ -494,7 +468,6 @@ function router(){
 
   $("#pageTitle").textContent = route.label;
 
-  // hide global back on dashboard, show elsewhere
   const backBtn = $("#globalBackBtn");
   if(backBtn) backBtn.style.display = (hash==="#/dashboard") ? "none" : "inline-flex";
 
@@ -670,7 +643,6 @@ async function renderContentList(type){
     </div>
   `;
 }
-
 function contentRow(i, canEdit){
   const muxOk = (i.mux?.trailerPlaybackId || i.mux?.contentPlaybackId) ? "Connected" : "—";
   const seasons = i.seasons?.length || 0;
@@ -727,21 +699,39 @@ function option(value, selected){
   return `<option value="${value}" ${isSel}>${txt}</option>`;
 }
 
-/* ---------------- Title images upload ---------------- */
-function handleImageUpload(evt, kind){
+/* ==========================================================
+   HERO/POSTER UPLOAD → Vercel Blob
+========================================================== */
+async function handleImageUpload(evt, kind){
   const file = evt.target.files?.[0];
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = reader.result;
-    tempImages[kind] = dataUrl;
-    const imgEl = kind==="hero" ? $("#heroPreview") : $("#posterPreview");
-    if(imgEl) imgEl.src = dataUrl;
-  };
-  reader.readAsDataURL(file);
+
+  // immediate preview
+  const previewURL = URL.createObjectURL(file);
+  const imgEl = kind==="hero" ? $("#heroPreview") : $("#posterPreview");
+  if(imgEl) imgEl.src = previewURL;
+
+  // upload to Blob via API route
+  const safeName = file.name.replace(/\s+/g, "-");
+  const res = await fetch(`/api/upload?filename=${encodeURIComponent(safeName)}`, {
+    method: "POST",
+    body: file
+  });
+  const data = await res.json();
+
+  if(!res.ok){
+    alert("Upload failed: " + (data.error || "unknown error"));
+    return;
+  }
+
+  // store public Blob URL in tempImages
+  tempImages[kind] = data.url;
+
+  // swap preview to CDN URL
+  if(imgEl) imgEl.src = data.url;
 }
 
-/* ---------------- Episode thumb upload ---------------- */
+/* ---------------- Episode thumb upload (still localStorage base64) ---------------- */
 function handleEpisodeThumbUpload(evt, seasonId, epId){
   const file = evt.target.files?.[0];
   if(!file || !tempSeriesDraft) return;
@@ -767,6 +757,7 @@ function renderContentForm(item){
   const type = item.type;
   const titleLabel = cap(type);
 
+  // previews use Blob URL (heroImageDataUrl/posterImageDataUrl) if present
   const heroSrc = item.heroImageDataUrl || item.heroImage1920x1080 || "";
   const posterSrc = item.posterImageDataUrl || item.poster214x321 || "";
   const mux = item.mux || {};
@@ -780,7 +771,6 @@ function renderContentForm(item){
     <div class="card p-6">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        <!-- Left column -->
         <div class="space-y-4">
           ${label("Title")}
           <input id="c_title" class="input" value="${val(item.title)}"/>
@@ -828,10 +818,8 @@ function renderContentForm(item){
           </label>
         </div>
 
-        <!-- Right column -->
         <div class="space-y-6">
 
-          <!-- HERO IMAGE -->
           <div class="card p-4 space-y-2">
             <div class="font-semibold">Hero Image (1920×1080)</div>
             <div class="flex items-start gap-4">
@@ -839,7 +827,7 @@ function renderContentForm(item){
               <div class="flex-1 space-y-2">
                 <input type="file" accept="image/*"
                   onchange="handleImageUpload(event,'hero')" class="input"/>
-                <div class="small">Stores as base64 in localStorage. Keep under ~1–2MB.</div>
+                <div class="small">Uploads to Vercel Blob. URL saved to title.</div>
 
                 ${label("OR Hero Image URL")}
                 <input id="c_hero" class="input" value="${val(item.heroImage1920x1080)}"/>
@@ -847,7 +835,6 @@ function renderContentForm(item){
             </div>
           </div>
 
-          <!-- POSTER -->
           <div class="card p-4 space-y-2">
             <div class="font-semibold">Poster (214×321)</div>
             <div class="flex items-start gap-4">
@@ -855,7 +842,7 @@ function renderContentForm(item){
               <div class="flex-1 space-y-2">
                 <input type="file" accept="image/*"
                   onchange="handleImageUpload(event,'poster')" class="input"/>
-                <div class="small">Same storage note as above.</div>
+                <div class="small">Uploads to Vercel Blob. URL saved to title.</div>
 
                 ${label("OR Poster URL")}
                 <input id="c_poster" class="input" value="${val(item.poster214x321)}"/>
@@ -863,7 +850,6 @@ function renderContentForm(item){
             </div>
           </div>
 
-          <!-- MUX CONFIG -->
           <div class="card p-4 space-y-3">
             <div class="font-semibold">Mux Configuration (${type==="series" ? "Series Trailer" : "Trailer + Full Content"})</div>
             <div class="small">Playback ID enables preview. HLS: <code>https://stream.mux.com/{PLAYBACK_ID}.m3u8</code></div>
@@ -895,7 +881,6 @@ function renderContentForm(item){
             <div id="muxPreviews" class="space-y-3"></div>
           </div>
 
-          <!-- SERIES BLOCK -->
           ${type==="series" ? `<div id="seriesBlock" class="space-y-3"></div>` : ``}
 
           <button class="w-full btn btn-primary"
@@ -950,7 +935,7 @@ function renderMuxPreviews(type){
 }
 
 /* ==========================================================
-   SERIES → SEASONS → EPISODES UI
+   SERIES → SEASONS → EPISODES UI (unchanged)
 ========================================================== */
 function renderSeriesSeasonsBlock(){
   const el = $("#seriesBlock");
@@ -1101,7 +1086,7 @@ function episodeMuxPreviewBlock(trailerPid, contentPid){
   return block(trailerPid, "Trailer") + block(contentPid, "Episode");
 }
 
-/* --- Series CRUD --- */
+/* --- Series CRUD (unchanged) --- */
 async function addSeason(){
   if(!tempSeriesDraft) return;
   const seasons = tempSeriesDraft.seasons || [];
@@ -1235,8 +1220,11 @@ async function handleSaveContent(mode, id, type){
     releaseYear: numOrUndef($("#c_year").value),
     heroImage1920x1080: $("#c_hero")?.value.trim() || "",
     poster214x321: $("#c_poster")?.value.trim() || "",
+
+    // NOW stores Blob URL from tempImages
     heroImageDataUrl: tempImages.hero ?? old?.heroImageDataUrl ?? "",
     posterImageDataUrl: tempImages.poster ?? old?.posterImageDataUrl ?? "",
+
     monetization,
     priceUSD: monetization==="tvod" ? numOrUndef($("#c_price")?.value) : undefined,
     isPublished: $("#c_published").checked,
@@ -1447,9 +1435,7 @@ async function saveAds(){
     vastTagUrl: $("#a_vast").value.trim()
   };
   await saveAdsSettings(ads);
-
   await logAction("Ads Saved", "GAM/VAST");
-
   alert("Ads settings saved.");
 }
 
@@ -1464,7 +1450,7 @@ async function renderPayments(){
       <h2 class="text-lg font-semibold">Payment Gateway — PayPal</h2>
 
       <div class="text-sm text-white/70">
-        Store only your <b>PayPal Client ID</b> here.  
+        Store only your <b>PayPal Client ID</b> here.
         <b>Do NOT enter Client Secret in the CMS.</b>
       </div>
 
@@ -1514,9 +1500,7 @@ async function handleSavePayments(){
     paypalEnv: $("#pp_env").value
   };
   await savePaymentsSettings(settings);
-
   await logAction("Payments Saved", settings.paypalEnv);
-
   alert("PayPal settings saved.");
   renderPayments();
 }
