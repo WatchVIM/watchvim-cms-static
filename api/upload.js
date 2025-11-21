@@ -1,40 +1,26 @@
 import { put } from "@vercel/blob";
 
-export const config = {
-  api: { bodyParser: false } // IMPORTANT for binary/video uploads
-};
+export const config = { runtime: "edge" };
 
-export default async function handler(req, res) {
+export default async function handler(req) {
   if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    return res.status(405).json({ error: "Method Not Allowed" });
+    return new Response("Method not allowed", { status: 405 });
   }
 
-  try {
-    const { filename } = req.query;
-    if (!filename) {
-      return res.status(400).json({ error: "Missing filename" });
-    }
+  const form = await req.formData();
+  const file = form.get("file");
+  const keyPrefix = form.get("keyPrefix") || "watchvim";
 
-    const contentType =
-      req.headers["content-type"] || "application/octet-stream";
-
-    const buffer = await new Promise((resolve, reject) => {
-      const chunks = [];
-      req.on("data", (c) => chunks.push(c));
-      req.on("end", () => resolve(Buffer.concat(chunks)));
-      req.on("error", reject);
-    });
-
-    const blob = await put(filename, buffer, {
-      access: "public",
-      contentType,
-      addRandomSuffix: true
-    });
-
-    return res.status(200).json({ url: blob.url });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
+  if (!file) {
+    return new Response("Missing file", { status: 400 });
   }
+
+  const pathname = `${keyPrefix}/${file.name}`;
+
+  const blob = await put(pathname, file, {
+    access: "public",
+    addRandomSuffix: true
+  });
+
+  return Response.json({ url: blob.url });
 }
-
