@@ -1,4 +1,4 @@
-// /api/publish.js
+// /api/publish.js  (Node.js)
 const { put } = require("@vercel/blob");
 
 module.exports = async function handler(req, res) {
@@ -8,7 +8,6 @@ module.exports = async function handler(req, res) {
       return res.end("Method not allowed");
     }
 
-    // Read JSON body
     let body = "";
     for await (const chunk of req) body += chunk;
     const payload = JSON.parse(body || "{}");
@@ -19,32 +18,55 @@ module.exports = async function handler(req, res) {
     }
 
     const ts = Date.now();
+    const stableCatalogKey = payload.stableCatalogKey || "catalog.json";
+    const stableManifestKey = payload.stableManifestKey || "manifest.json";
 
-    // 1) Upload catalog
+    // 1) Versioned catalog backup
     const catalogKey = `catalog-${ts}.json`;
-    const catalogBlob = await put(
-      catalogKey,
+    const catalogBlob = await put(catalogKey, JSON.stringify(payload, null, 2), {
+      access: "public",
+      contentType: "application/json",
+      addRandomSuffix: false
+    });
+
+    // 2) Stable catalog (overwrite)
+    const stableCatalogBlob = await put(
+      stableCatalogKey,
       JSON.stringify(payload, null, 2),
       {
         access: "public",
-        contentType: "application/json"
+        contentType: "application/json",
+        addRandomSuffix: false
       }
     );
 
-    // 2) Upload manifest pointing to latest catalog
+    // 3) Manifest object
     const manifest = {
       version: payload.version || 1,
       publishedAt: new Date().toISOString(),
-      latestCatalogUrl: catalogBlob.url
+      latestCatalogUrl: stableCatalogBlob.url
     };
 
+    // 4) Versioned manifest backup
     const manifestKey = `manifest-${ts}.json`;
     const manifestBlob = await put(
       manifestKey,
       JSON.stringify(manifest, null, 2),
       {
         access: "public",
-        contentType: "application/json"
+        contentType: "application/json",
+        addRandomSuffix: false
+      }
+    );
+
+    // 5) Stable manifest (overwrite)
+    const stableManifestBlob = await put(
+      stableManifestKey,
+      JSON.stringify(manifest, null, 2),
+      {
+        access: "public",
+        contentType: "application/json",
+        addRandomSuffix: false
       }
     );
 
@@ -52,6 +74,8 @@ module.exports = async function handler(req, res) {
     res.statusCode = 200;
     res.end(
       JSON.stringify({
+        stableManifestUrl: stableManifestBlob.url,
+        stableCatalogUrl: stableCatalogBlob.url,
         manifestUrl: manifestBlob.url,
         catalogUrl: catalogBlob.url
       })
