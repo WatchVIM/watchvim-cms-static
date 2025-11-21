@@ -1,14 +1,23 @@
 import { put } from "@vercel/blob";
 import formidable from "formidable";
-import fs from "fs";
+import fs from "fs/promises";
 
 export const config = {
   runtime: "nodejs",
-  api: { bodyParser: false }
+  api: { bodyParser: false },
 };
 
 export default async function handler(req, res) {
   try {
+    // Basic CORS
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      res.status(200).end();
+      return;
+    }
+
     if (req.method !== "POST") {
       res.status(405).send("Method not allowed");
       return;
@@ -20,21 +29,30 @@ export default async function handler(req, res) {
       try {
         if (err) throw err;
 
-        const file = files.file;
-        const keyPrefix = (fields.keyPrefix || "watchvim").toString();
+        // formidable can return arrays in some versions
+        const fileObj = Array.isArray(files.file) ? files.file[0] : files.file;
+        const keyPrefix = (fields.keyPrefix || "watchvim").toString().replace(/^\/+/, "");
 
-        if (!file) {
+        if (!fileObj) {
           res.status(400).send("Missing file");
           return;
         }
 
-        const data = fs.readFileSync(file.filepath);
-        const pathname = `${keyPrefix}/${file.originalFilename}`;
+        // Optional server-side size guard (index.html already checks)
+        const maxBytes = 4.2 * 1024 * 1024;
+        if (fileObj.size && fileObj.size > maxBytes) {
+          res.status(413).send("File too large (limit ~4MB)");
+          return;
+        }
+
+        const data = await fs.readFile(fileObj.filepath);
+        const safeName = (fileObj.originalFilename || "upload").replace(/[^\w.\-]+/g, "_");
+        const pathname = `${keyPrefix}/${safeName}`;
 
         const blob = await put(pathname, data, {
           access: "public",
           addRandomSuffix: true,
-          contentType: file.mimetype || "application/octet-stream"
+          contentType: fileObj.mimetype || "application/octet-stream",
         });
 
         res.status(200).json({ url: blob.url });
