@@ -1,87 +1,92 @@
-// /api/publish.js  (Node.js)
-const { put } = require("@vercel/blob");
+// api/publish.js
+import { put } from "@vercel/blob";
 
-module.exports = async function handler(req, res) {
+export const config = { runtime: "nodejs20.x" };
+
+export default async function handler(req) {
+  if (req.method !== "POST") {
+    return new Response("Method not allowed", { status: 405 });
+  }
+
+  const token =
+    process.env.BLOB_READ_WRITE_TOKEN ||
+    process.env.STORAGE_BLOB_READ_WRITE_TOKEN;
+
+  if (!token) {
+    return new Response("Missing BLOB_READ_WRITE_TOKEN env var", { status: 500 });
+  }
+
+  let payload = {};
   try {
-    if (req.method !== "POST") {
-      res.statusCode = 405;
-      return res.end("Method not allowed");
-    }
+    payload = await req.json();
+  } catch {}
 
-    let body = "";
-    for await (const chunk of req) body += chunk;
-    const payload = JSON.parse(body || "{}");
+  if (!payload?.titles) {
+    return new Response("Missing titles in payload", { status: 400 });
+  }
 
-    if (!payload || !payload.titles) {
-      res.statusCode = 400;
-      return res.end("Missing titles in payload");
-    }
+  const ts = Date.now();
 
-    const ts = Date.now();
-    const stableCatalogKey = payload.stableCatalogKey || "catalog.json";
-    const stableManifestKey = payload.stableManifestKey || "manifest.json";
-
-    // 1) Versioned catalog backup
-    const catalogKey = `catalog-${ts}.json`;
-    const catalogBlob = await put(catalogKey, JSON.stringify(payload, null, 2), {
+  // 1) Versioned catalog
+  const catalogKey = `catalog-${ts}.json`;
+  const catalogBlob = await put(
+    catalogKey,
+    JSON.stringify(payload, null, 2),
+    {
       access: "public",
       contentType: "application/json",
-      addRandomSuffix: false
-    });
+      token,
+    }
+  );
 
-    // 2) Stable catalog (overwrite)
-    const stableCatalogBlob = await put(
-      stableCatalogKey,
-      JSON.stringify(payload, null, 2),
-      {
-        access: "public",
-        contentType: "application/json",
-        addRandomSuffix: false
-      }
-    );
+  // 2) Versioned manifest
+  const manifest = {
+    version: payload.version || 1,
+    publishedAt: new Date().toISOString(),
+    latestCatalogUrl: catalogBlob.url,
+  };
 
-    // 3) Manifest object
-    const manifest = {
-      version: payload.version || 1,
-      publishedAt: new Date().toISOString(),
-      latestCatalogUrl: stableCatalogBlob.url
-    };
+  const manifestKey = `manifest-${ts}.json`;
+  const manifestBlob = await put(
+    manifestKey,
+    JSON.stringify(manifest, null, 2),
+    {
+      access: "public",
+      contentType: "application/json",
+      token,
+    }
+  );
 
-    // 4) Versioned manifest backup
-    const manifestKey = `manifest-${ts}.json`;
-    const manifestBlob = await put(
-      manifestKey,
-      JSON.stringify(manifest, null, 2),
-      {
-        access: "public",
-        contentType: "application/json",
-        addRandomSuffix: false
-      }
-    );
+  // 3) Stable overwrites
+  const stableCatalogKey = payload.stableCatalogKey || "catalog.json";
+  const stableManifestKey = payload.stableManifestKey || "manifest.json";
 
-    // 5) Stable manifest (overwrite)
-    const stableManifestBlob = await put(
-      stableManifestKey,
-      JSON.stringify(manifest, null, 2),
-      {
-        access: "public",
-        contentType: "application/json",
-        addRandomSuffix: false
-      }
-    );
+  const stableCatalogBlob = await put(
+    stableCatalogKey,
+    JSON.stringify(payload, null, 2),
+    {
+      access: "public",
+      contentType: "application/json",
+      addRandomSuffix: false,
+      token,
+    }
+  );
 
-    res.setHeader("Content-Type", "application/json");
-    res.statusCode = 200;
-    res.end(
-      JSON.stringify({
-        stableManifestUrl: stableManifestBlob.url,
-        stableCatalogUrl: stableCatalogBlob.url,
-        manifestUrl: manifestBlob.url,
-        catalogUrl: catalogBlob.url
-      })
-    );
-  } catch (err) {
-    res.statusCode = 500;
-    res.end(String(err?.message || err));
-  }
-};
+  const stableManifestBlob = await put(
+    stableManifestKey,
+    JSON.stringify(manifest, null, 2),
+    {
+      access: "public",
+      contentType: "application/json",
+      addRandomSuffix: false,
+      token,
+    }
+  );
+
+  return Response.json({
+    stableManifestUrl: stableManifestBlob.url,
+    stableCatalogUrl: stableCatalogBlob.url,
+    manifestUrl: manifestBlob.url,
+    catalogUrl: catalogBlob.url,
+  });
+}
