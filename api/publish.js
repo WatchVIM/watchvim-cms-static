@@ -1,39 +1,63 @@
-import { put } from "@vercel/blob";
+// /api/publish.js
+const { put } = require("@vercel/blob");
 
-export const config = { runtime: "edge" };
+module.exports = async function handler(req, res) {
+  try {
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      return res.end("Method not allowed");
+    }
 
-const MANIFEST_KEY = "manifest-watchvim.json";
+    // Read JSON body
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const payload = JSON.parse(body || "{}");
 
-export default async function handler(req) {
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
+    if (!payload || !payload.titles) {
+      res.statusCode = 400;
+      return res.end("Missing titles in payload");
+    }
+
+    const ts = Date.now();
+
+    // 1) Upload catalog
+    const catalogKey = `catalog-${ts}.json`;
+    const catalogBlob = await put(
+      catalogKey,
+      JSON.stringify(payload, null, 2),
+      {
+        access: "public",
+        contentType: "application/json"
+      }
+    );
+
+    // 2) Upload manifest pointing to latest catalog
+    const manifest = {
+      version: payload.version || 1,
+      publishedAt: new Date().toISOString(),
+      latestCatalogUrl: catalogBlob.url
+    };
+
+    const manifestKey = `manifest-${ts}.json`;
+    const manifestBlob = await put(
+      manifestKey,
+      JSON.stringify(manifest, null, 2),
+      {
+        access: "public",
+        contentType: "application/json"
+      }
+    );
+
+    res.setHeader("Content-Type", "application/json");
+    res.statusCode = 200;
+    res.end(
+      JSON.stringify({
+        manifestUrl: manifestBlob.url,
+        catalogUrl: catalogBlob.url
+      })
+    );
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(String(err?.message || err));
   }
-
-  const payload = await req.json();
-
-  // 1) upload catalog
-  const catalogKey = `catalog-${Date.now()}.json`;
-  const catalogBlob = await put(
-    catalogKey,
-    new Blob([JSON.stringify(payload)], { type: "application/json" }),
-    { access: "public", addRandomSuffix: false }
-  );
-
-  // 2) update manifest pointing to latest catalog
-  const manifest = {
-    latestCatalogUrl: catalogBlob.url,
-    version: payload.version,
-    publishedAt: payload.publishedAt
-  };
-
-  const manifestBlob = await put(
-    MANIFEST_KEY,
-    new Blob([JSON.stringify(manifest)], { type: "application/json" }),
-    { access: "public", addRandomSuffix: false }
-  );
-
-  return Response.json({
-    catalogUrl: catalogBlob.url,
-    manifestUrl: manifestBlob.url
-  });
-}
+};
