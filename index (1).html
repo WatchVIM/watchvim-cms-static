@@ -1,0 +1,1572 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WatchVIM CMS Portal</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            watchBlack: "#0a0a0a",
+            watchRed: "#e50914",
+            watchGold: "#d4af37"
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body { background:#0a0a0a; color:#fff; font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    .input { background:#111; border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:8px 10px; width:100%; }
+    .label { font-size:12px; color:rgba(255,255,255,.7); }
+    .pill { font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(255,255,255,.08); }
+    .btn { padding:8px 12px; border-radius:10px; background:rgba(255,255,255,.1); }
+    .btn:hover { background:rgba(255,255,255,.16); }
+    .btn-red { background:#e50914; font-weight:700; }
+    .btn-red:hover { background:#ff1f2b; }
+    .card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.1); border-radius:16px; padding:14px; }
+    .row-scroll { display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; }
+    .row-scroll::-webkit-scrollbar { height:8px; }
+    .row-scroll::-webkit-scrollbar-thumb { background:#222; border-radius:999px; }
+    .muted { color: rgba(255,255,255,.65); }
+    .small { font-size:12px; }
+  </style>
+</head>
+
+<body>
+<div class="min-h-screen grid grid-cols-[260px_1fr]">
+
+  <!-- Sidebar -->
+  <aside class="border-r border-white/10 p-4 space-y-3">
+    <div class="flex items-center gap-2 mb-4">
+      <div class="w-9 h-9 rounded-xl bg-white/10 grid place-items-center font-black text-watchGold">V</div>
+      <div>
+        <div class="text-lg font-bold">WatchVIM</div>
+        <div class="text-xs text-white/60">CMS Portal</div>
+      </div>
+    </div>
+
+    <nav class="space-y-1">
+      <button class="w-full text-left btn" onclick="navTo('dashboard')">Dashboard</button>
+      <button class="w-full text-left btn" onclick="navTo('titles')">Movies / Docs / Shorts / Foreign</button>
+      <button class="w-full text-left btn" onclick="navTo('series')">Series / Seasons / Episodes</button>
+      <button class="w-full text-left btn" onclick="navTo('loop')">Loop Channel</button>
+      <button class="w-full text-left btn" onclick="navTo('users')">Users (Supabase)</button>
+      <button class="w-full text-left btn" onclick="navTo('settings')">Settings</button>
+      <button class="w-full text-left btn btn-red" onclick="navTo('publish')">Publish</button>
+    </nav>
+
+    <div class="pt-4 border-t border-white/10 text-xs text-white/60">
+      Local-first CMS. Save often. Publish when ready.
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main id="main" class="p-6 space-y-6"></main>
+</div>
+
+<script>
+/* =========================================================
+   WATCHVIM CMS (single-file SPA)
+   - LocalStorage for authoring
+   - Vercel Blob for media uploads
+   - Publish API creates Catalog JSON + Manifest JSON
+   - Frontend reads Manifest.latestCatalogUrl
+========================================================= */
+
+/* =====================
+   STATE + STORAGE
+===================== */
+
+const LS_KEYS = {
+  CMS_STATE: "watchvim_cms_state_v6",
+  NAV_STACK: "watchvim_nav_stack_v6",
+};
+
+// canonical schema published to frontend/mobile/TV apps
+function defaultState(){
+  return {
+    titles: [],
+    loopChannel: {
+      rotationItems: [],      // { id, refType:'title'|'episode', refId, label }
+      adFrequencyMins: 12,
+      shuffle: true,
+      sponsoredAds: []        // { id, name, fileUrl, muxAdPlaybackId, durationSec }
+    },
+    payment: {
+      paypalClientId: "",
+      paypalEnv: "sandbox"
+    },
+    analytics: {
+      views7d: 0,
+      minutesWatched7d: 0,
+      newUsers7d: 0,
+      revenue7d: 0
+    },
+    lastPublished: null,
+    version: 1
+  };
+}
+
+let cmsState = loadState();
+let navStack = loadNavStack();
+
+function loadState(){
+  const raw = localStorage.getItem(LS_KEYS.CMS_STATE);
+  if(!raw) return defaultState();
+  try { return JSON.parse(raw); } catch { return defaultState(); }
+}
+function saveState(){
+  localStorage.setItem(LS_KEYS.CMS_STATE, JSON.stringify(cmsState));
+}
+function loadNavStack(){
+  const raw = localStorage.getItem(LS_KEYS.NAV_STACK);
+  if(!raw) return [];
+  try { return JSON.parse(raw); } catch { return []; }
+}
+function saveNavStack(){
+  localStorage.setItem(LS_KEYS.NAV_STACK, JSON.stringify(navStack));
+}
+
+function pushNav(route){
+  navStack.push(route);
+  saveNavStack();
+}
+function goBack(){
+  // go back within current section only
+  navStack.pop();
+  saveNavStack();
+  const prev = navStack.pop() || "dashboard";
+  navTo(prev, { push:false });
+}
+
+function uid(prefix="id"){
+  return prefix + "_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+/* =====================
+   ROUTER
+===================== */
+
+function navTo(route, opts={push:true}){
+  if(opts.push) pushNav(route);
+  render(route);
+}
+
+function render(route){
+  const main = document.getElementById("main");
+  if(!main) return;
+
+  const [section, a, b, c] = route.split(":");
+
+  if(section==="dashboard") return renderDashboard();
+  if(section==="titles") return renderTitlesList();
+  if(section==="titleEdit") return renderTitleEdit(a);
+
+  if(section==="series") return renderSeriesList();
+  if(section==="seriesEdit") return renderSeriesEdit(a);
+  if(section==="seasonEdit") return renderSeasonEdit(a,b);
+  if(section==="episodeEdit") return renderEpisodeEdit(a,b,c);
+
+  if(section==="loop") return renderLoop();
+  if(section==="users") return renderUsersPlaceholder();
+  if(section==="settings") return renderSettings();
+  if(section==="publish") return renderPublish();
+
+  renderDashboard();
+}
+
+/* =====================
+   UPLOAD (server -> Vercel Blob)
+   Requires /api/upload.js in same project
+===================== */
+
+async function uploadToBlob(file, keyPrefix="watchvim"){
+  if(!file) return null;
+  if(file.size > 4.2 * 1024 * 1024){
+    alert("File is over 4MB. Please resize/compress before uploading.");
+    return null;
+  }
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("keyPrefix", keyPrefix);
+
+  const res = await fetch("/api/upload", { method:"POST", body: fd });
+  if(!res.ok){
+    const txt = await res.text();
+    throw new Error(txt||"Upload failed");
+  }
+  return await res.json(); // { url }
+}
+
+/* =====================
+   SHARED HELPERS
+===================== */
+
+const h = (label, value) => `<div class="pill">${label}: <b>${value}</b></div>`;
+
+function typeBadge(type){
+  const map = {
+    films:"Movies", documentaries:"Movies",
+    series:"Series", shorts:"Shorts", foreign:"Foreign"
+  };
+  return map[type] || type || "Uncategorized";
+}
+function getTitleById(id){ return cmsState.titles.find(t=>t.id===id); }
+function byType(type){ return cmsState.titles.filter(t=>t.type===type); }
+
+function splitGenres(str){
+  return (str||"").split(",").map(x=>x.trim()).filter(Boolean);
+}
+function tagify(arr){
+  return (arr||[]).join(", ");
+}
+
+/* =========================================================
+   DASHBOARD (Analytics + KPIs)
+========================================================= */
+
+function renderDashboard(){
+  const main = document.getElementById("main");
+
+  const total = cmsState.titles.length;
+  const published = cmsState.titles.filter(t=>t.isPublished).length;
+  const seriesCount = byType("series").length;
+  const shortsCount = byType("shorts").length;
+  const analytics = cmsState.analytics || defaultState().analytics;
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Dashboard</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="navTo('titles')">Manage Titles</button>
+        <button class="btn btn-red" onclick="navTo('publish')">Publish</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3">
+      <div class="card">${h("Total Titles", total)}</div>
+      <div class="card">${h("Published", published)}</div>
+      <div class="card">${h("Series", seriesCount)}</div>
+      <div class="card">${h("Shorts", shortsCount)}</div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3">
+      <div class="card space-y-1">
+        <div class="text-xs text-white/60">Views (7d)</div>
+        <div class="text-2xl font-bold">${analytics.views7d}</div>
+        <div class="text-xs text-white/50">Connect Supabase/Mux later</div>
+      </div>
+      <div class="card space-y-1">
+        <div class="text-xs text-white/60">Minutes Watched (7d)</div>
+        <div class="text-2xl font-bold">${analytics.minutesWatched7d}</div>
+        <div class="text-xs text-white/50">Connect Supabase/Mux later</div>
+      </div>
+      <div class="card space-y-1">
+        <div class="text-xs text-white/60">New Users (7d)</div>
+        <div class="text-2xl font-bold">${analytics.newUsers7d}</div>
+        <div class="text-xs text-white/50">Supabase auth.users</div>
+      </div>
+      <div class="card space-y-1">
+        <div class="text-xs text-white/60">Revenue (7d)</div>
+        <div class="text-2xl font-bold">$${Number(analytics.revenue7d||0).toFixed(2)}</div>
+        <div class="text-xs text-white/50">PayPal/Ads later</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="font-semibold mb-2">Recent Titles</div>
+      <div class="row-scroll">
+        ${
+          cmsState.titles.slice(-10).reverse().map(t=>`
+            <div class="w-[160px] shrink-0 cursor-pointer"
+                 onclick="navTo('${t.type==='series'?'seriesEdit':'titleEdit'}:${t.id}')">
+              <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
+                <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
+              </div>
+              <div class="mt-2 text-sm font-medium line-clamp-2">${t.title||"Untitled"}</div>
+              <div class="text-xs text-white/60">${typeBadge(t.type)}</div>
+            </div>
+          `).join("")
+        }
+      </div>
+    </div>
+
+    <div class="card small muted">
+      <div class="font-semibold mb-1">Publishing Pipeline</div>
+      CMS → Publish → uploads Catalog JSON → updates Manifest JSON (latestCatalogUrl). Frontend/mobile/TV apps read Manifest.
+    </div>
+  `;
+}
+
+/* =========================================================
+   TITLES LIST (non-series)
+========================================================= */
+
+function renderTitlesList(){
+  const main = document.getElementById("main");
+  const titles = cmsState.titles.filter(t=>t.type!=="series");
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Movies / Docs / Shorts / Foreign</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="createTitle()">+ New Title</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-5 gap-3">
+      ${
+        titles.map(t=>`
+          <div class="card cursor-pointer" onclick="navTo('titleEdit:${t.id}')">
+            <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
+              <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
+            </div>
+            <div class="mt-2 font-semibold line-clamp-2">${t.title||"Untitled"}</div>
+            <div class="text-xs text-white/60 flex gap-1 flex-wrap">
+              <span class="pill">${typeBadge(t.type)}</span>
+              ${t.isPublished?`<span class="pill bg-green-600/20">Published</span>`:""}
+            </div>
+          </div>
+        `).join("")
+      }
+    </div>
+  `;
+}
+
+function createTitle(){
+  const t = {
+    id: uid("title"),
+    type: "films",
+    title: "",
+    synopsis: "",
+    genre: [],
+    releaseYear: "",
+    runtimeMins: "",
+    language: "English",
+    rating: "",
+    posterUrl: "",
+    heroUrl: "",
+    trailerPlaybackId: "",
+    contentPlaybackId: "",
+    isPublished: false,
+    monetization: {
+      svod: true,
+      avod: false,
+      tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
+    },
+    appImages: {
+      mobileHeroUrl:"",
+      mobilePosterUrl:"",
+      tvHeroUrl:"",
+      tvPosterUrl:""
+    }
+  };
+
+  cmsState.titles.push(t);
+  saveState();
+  navTo("titleEdit:"+t.id);
+}
+
+/* =========================================================
+   TITLE EDITOR
+========================================================= */
+
+function renderTitleEdit(id){
+  const main = document.getElementById("main");
+  const t = getTitleById(id);
+  if(!t) return navTo("titles");
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Edit Title</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveTitle('${id}')">Save</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6">
+      <div class="space-y-3">
+        <div class="card space-y-2">
+          <div class="font-semibold">Poster (2:3)</div>
+          <div class="aspect-[2/3] bg-white/5 rounded-xl overflow-hidden border border-white/10">
+            <img id="posterPreview" src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
+          </div>
+          <input id="posterInput" type="file" accept="image/*" class="input"/>
+          <button class="btn w-full" onclick="uploadPoster('${id}')">Upload Poster</button>
+        </div>
+
+        <div class="card space-y-2">
+          <div class="font-semibold">Hero (16:9)</div>
+          <div class="aspect-video bg-white/5 rounded-xl overflow-hidden border border-white/10">
+            <img id="heroPreview" src="${t.heroUrl||''}" class="w-full h-full object-cover"/>
+          </div>
+          <input id="heroInput" type="file" accept="image/*" class="input"/>
+          <button class="btn w-full" onclick="uploadHero('${id}')">Upload Hero</button>
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div class="card space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Type</div>
+              <select id="type" class="input">
+                ${["films","documentaries","shorts","foreign"].map(x=>
+                  `<option value="${x}" ${t.type===x?"selected":""}>${typeBadge(x)}</option>`
+                ).join("")}
+              </select>
+            </div>
+            <div>
+              <div class="label">Release Year</div>
+              <input id="releaseYear" class="input" value="${t.releaseYear||""}"/>
+            </div>
+          </div>
+
+          <div>
+            <div class="label">Title</div>
+            <input id="title" class="input" value="${t.title||""}"/>
+          </div>
+
+          <div>
+            <div class="label">Synopsis</div>
+            <textarea id="synopsis" class="input" rows="4">${t.synopsis||""}</textarea>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <div class="label">Runtime (mins)</div>
+              <input id="runtimeMins" class="input" value="${t.runtimeMins||""}"/>
+            </div>
+            <div>
+              <div class="label">Language</div>
+              <input id="language" class="input" value="${t.language||""}"/>
+            </div>
+            <div>
+              <div class="label">Rating</div>
+              <input id="rating" class="input" value="${t.rating||""}"/>
+            </div>
+          </div>
+
+          <div>
+            <div class="label">Genres (comma separated)</div>
+            <input id="genre" class="input" value="${tagify(t.genre)}"/>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Trailer Mux Playback ID</div>
+              <input id="trailerPlaybackId" class="input" value="${t.trailerPlaybackId||""}"/>
+            </div>
+            <div>
+              <div class="label">Content Mux Playback ID</div>
+              <input id="contentPlaybackId" class="input" value="${t.contentPlaybackId||""}"/>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <input id="isPublished" type="checkbox" ${t.isPublished?"checked":""}/>
+            <label for="isPublished" class="text-sm">Published</label>
+          </div>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Monetization (multiple allowed)</div>
+          <div class="flex flex-wrap gap-4 text-sm">
+            <label class="flex items-center gap-2">
+              <input id="svod" type="checkbox" ${t.monetization?.svod?"checked":""}/>
+              SVOD
+            </label>
+
+            <label class="flex items-center gap-2">
+              <input id="avod" type="checkbox" ${t.monetization?.avod?"checked":""}/>
+              AVOD
+            </label>
+
+            <label class="flex items-center gap-2">
+              <input id="tvodEnabled" type="checkbox" ${t.monetization?.tvod?.enabled?"checked":""}
+                     onchange="toggleTVODFields()"/>
+              TVOD
+            </label>
+          </div>
+
+          <div id="tvodFields" class="${t.monetization?.tvod?.enabled?'':'hidden'} grid grid-cols-3 gap-3">
+            <div>
+              <div class="label">Rental Price ($)</div>
+              <input id="rentalPrice" class="input" value="${t.monetization?.tvod?.rentalPrice||""}"/>
+            </div>
+            <div>
+              <div class="label">Rental Window (hrs)</div>
+              <input id="rentalWindowHours" class="input" value="${t.monetization?.tvod?.rentalWindowHours||48}"/>
+            </div>
+            <div>
+              <div class="label">Buy Price ($)</div>
+              <input id="buyPrice" class="input" value="${t.monetization?.tvod?.buyPrice||""}"/>
+            </div>
+          </div>
+
+          <div class="text-xs text-white/60">Enable any combo of SVOD + AVOD + TVOD.</div>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Mobile + TV App Images</div>
+          <div class="grid grid-cols-2 gap-3">
+            ${renderAppImageUpload(id,"mobileHeroUrl","Mobile Hero (9:16)","aspect-[9/16]","mobileHeroInput","mobileHeroPreview")}
+            ${renderAppImageUpload(id,"mobilePosterUrl","Mobile Poster (2:3)","aspect-[2/3]","mobilePosterInput","mobilePosterPreview")}
+            ${renderAppImageUpload(id,"tvHeroUrl","TV Hero (16:9)","aspect-video","tvHeroInput","tvHeroPreview")}
+            ${renderAppImageUpload(id,"tvPosterUrl","TV Poster (2:3)","aspect-[2/3]","tvPosterInput","tvPosterPreview")}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAppImageUpload(id, field, label, aspect, inputId, previewId){
+  const t = getTitleById(id);
+  return `
+    <div class="space-y-2">
+      <div class="label">${label}</div>
+      <img id="${previewId}" src="${t.appImages?.[field]||''}"
+           class="w-full ${aspect} object-cover rounded-xl border border-white/10 bg-white/5"/>
+      <input id="${inputId}" type="file" accept="image/*" class="input"/>
+      <button class="btn w-full" onclick="uploadAppImage('${id}','${field}','${inputId}','${previewId}')">
+        Upload
+      </button>
+    </div>
+  `;
+}
+
+function toggleTVODFields(){
+  const enabled = document.getElementById("tvodEnabled").checked;
+  document.getElementById("tvodFields").classList.toggle("hidden", !enabled);
+}
+
+async function uploadPoster(id){
+  const f = document.getElementById("posterInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `titles/${id}/poster`);
+  const t = getTitleById(id);
+  t.posterUrl = out.url;
+  saveState();
+  document.getElementById("posterPreview").src = out.url;
+}
+
+async function uploadHero(id){
+  const f = document.getElementById("heroInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `titles/${id}/hero`);
+  const t = getTitleById(id);
+  t.heroUrl = out.url;
+  saveState();
+  document.getElementById("heroPreview").src = out.url;
+}
+
+async function uploadAppImage(id, field, inputId, previewId){
+  const f = document.getElementById(inputId).files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `titles/${id}/apps/${field}`);
+  const t = getTitleById(id);
+  t.appImages = t.appImages || {};
+  t.appImages[field] = out.url;
+  saveState();
+  document.getElementById(previewId).src = out.url;
+}
+
+function saveTitle(id){
+  const t = getTitleById(id);
+
+  t.type = document.getElementById("type").value;
+  t.title = document.getElementById("title").value.trim();
+  t.synopsis = document.getElementById("synopsis").value.trim();
+  t.genre = splitGenres(document.getElementById("genre").value);
+  t.releaseYear = document.getElementById("releaseYear").value.trim();
+  t.runtimeMins = document.getElementById("runtimeMins").value.trim();
+  t.language = document.getElementById("language").value.trim();
+  t.rating = document.getElementById("rating").value.trim();
+  t.trailerPlaybackId = document.getElementById("trailerPlaybackId").value.trim();
+  t.contentPlaybackId = document.getElementById("contentPlaybackId").value.trim();
+  t.isPublished = document.getElementById("isPublished").checked;
+
+  t.monetization = t.monetization || {};
+  t.monetization.svod = document.getElementById("svod").checked;
+  t.monetization.avod = document.getElementById("avod").checked;
+  t.monetization.tvod = t.monetization.tvod || {};
+  t.monetization.tvod.enabled = document.getElementById("tvodEnabled").checked;
+  t.monetization.tvod.rentalPrice = document.getElementById("rentalPrice")?.value.trim() || "";
+  t.monetization.tvod.rentalWindowHours = Number(document.getElementById("rentalWindowHours")?.value || 48);
+  t.monetization.tvod.buyPrice = document.getElementById("buyPrice")?.value.trim() || "";
+
+  if(!t.monetization.svod && !t.monetization.avod && !t.monetization.tvod.enabled){
+    alert("Enable at least one monetization option.");
+    return;
+  }
+
+  saveState();
+  alert("Saved.");
+}
+
+/* =========================================================
+   SERIES LIST + EDITOR + SEASONS + EPISODES
+========================================================= */
+
+function renderSeriesList(){
+  const main = document.getElementById("main");
+  const series = byType("series");
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Series</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="createSeries()">+ New Series</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-5 gap-3">
+      ${
+        series.map(s=>`
+          <div class="card cursor-pointer" onclick="navTo('seriesEdit:${s.id}')">
+            <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
+              <img src="${s.posterUrl||''}" class="w-full h-full object-cover"/>
+            </div>
+            <div class="mt-2 font-semibold line-clamp-2">${s.title||"Untitled Series"}</div>
+            <div class="text-xs text-white/60">${(s.seasons||[]).length} seasons</div>
+          </div>
+        `).join("")
+      }
+    </div>
+  `;
+}
+
+function createSeries(){
+  const s = {
+    id: uid("series"),
+    type: "series",
+    title: "",
+    synopsis: "",
+    genre: [],
+    releaseYear: "",
+    language: "English",
+    posterUrl: "",
+    heroUrl: "",
+    trailerPlaybackId: "",
+    contentPlaybackId: "",
+    isPublished: false,
+    monetization: {
+      svod: true,
+      avod: false,
+      tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
+    },
+    appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" },
+    seasons: []
+  };
+
+  cmsState.titles.push(s);
+  saveState();
+  navTo("seriesEdit:"+s.id);
+}
+
+function renderSeriesEdit(seriesId){
+  const main = document.getElementById("main");
+  const s = getTitleById(seriesId);
+  if(!s) return navTo("series");
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Edit Series</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveSeries('${seriesId}')">Save Series</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6">
+      <div class="space-y-3">
+        <div class="card space-y-2">
+          <div class="font-semibold">Series Poster</div>
+          <div class="aspect-[2/3] bg-white/5 rounded-xl overflow-hidden border border-white/10">
+            <img id="seriesPosterPreview" src="${s.posterUrl||''}" class="w-full h-full object-cover"/>
+          </div>
+          <input id="seriesPosterInput" type="file" accept="image/*" class="input"/>
+          <button class="btn w-full" onclick="uploadSeriesPoster('${seriesId}')">Upload Poster</button>
+        </div>
+
+        <div class="card space-y-2">
+          <div class="font-semibold">Series Hero</div>
+          <div class="aspect-video bg-white/5 rounded-xl overflow-hidden border border-white/10">
+            <img id="seriesHeroPreview" src="${s.heroUrl||''}" class="w-full h-full object-cover"/>
+          </div>
+          <input id="seriesHeroInput" type="file" accept="image/*" class="input"/>
+          <button class="btn w-full" onclick="uploadSeriesHero('${seriesId}')">Upload Hero</button>
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div class="card space-y-3">
+          <div class="label">Series Title</div>
+          <input id="seriesTitle" class="input" value="${s.title||""}"/>
+
+          <div class="label">Synopsis</div>
+          <textarea id="seriesSynopsis" class="input" rows="4">${s.synopsis||""}</textarea>
+
+          <div class="label">Genres (comma separated)</div>
+          <input id="seriesGenre" class="input" value="${tagify(s.genre)}"/>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Release Year</div>
+              <input id="seriesReleaseYear" class="input" value="${s.releaseYear||""}"/>
+            </div>
+            <div>
+              <div class="label">Language</div>
+              <input id="seriesLanguage" class="input" value="${s.language||""}"/>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Trailer Playback ID</div>
+              <input id="seriesTrailerPlaybackId" class="input" value="${s.trailerPlaybackId||""}"/>
+            </div>
+            <div>
+              <div class="label">Series Content Playback ID (optional)</div>
+              <input id="seriesContentPlaybackId" class="input" value="${s.contentPlaybackId||""}"/>
+            </div>
+          </div>
+
+          <label class="flex items-center gap-2 text-sm">
+            <input id="seriesPublished" type="checkbox" ${s.isPublished?"checked":""}/>
+            Published
+          </label>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Series Monetization (default for episodes)</div>
+          <div class="flex flex-wrap gap-4 text-sm">
+            <label class="flex items-center gap-2"><input id="seriesSVOD" type="checkbox" ${s.monetization?.svod?"checked":""}/> SVOD</label>
+            <label class="flex items-center gap-2"><input id="seriesAVOD" type="checkbox" ${s.monetization?.avod?"checked":""}/> AVOD</label>
+            <label class="flex items-center gap-2"><input id="seriesTVODEnabled" type="checkbox" ${s.monetization?.tvod?.enabled?"checked":""} onchange="toggleSeriesTVODFields()"/> TVOD</label>
+          </div>
+          <div id="seriesTVODFields" class="${s.monetization?.tvod?.enabled?'':'hidden'} grid grid-cols-3 gap-3">
+            <div><div class="label">Rental Price ($)</div><input id="seriesRentalPrice" class="input" value="${s.monetization?.tvod?.rentalPrice||""}"/></div>
+            <div><div class="label">Window (hrs)</div><input id="seriesWindow" class="input" value="${s.monetization?.tvod?.rentalWindowHours||48}"/></div>
+            <div><div class="label">Buy Price ($)</div><input id="seriesBuyPrice" class="input" value="${s.monetization?.tvod?.buyPrice||""}"/></div>
+          </div>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Series Mobile + TV App Images</div>
+          <div class="grid grid-cols-2 gap-3">
+            ${renderSeriesAppImageUpload(seriesId,"mobileHeroUrl","Mobile Hero (9:16)","aspect-[9/16]","seriesMobileHeroInput","seriesMobileHeroPreview")}
+            ${renderSeriesAppImageUpload(seriesId,"mobilePosterUrl","Mobile Poster (2:3)","aspect-[2/3]","seriesMobilePosterInput","seriesMobilePosterPreview")}
+            ${renderSeriesAppImageUpload(seriesId,"tvHeroUrl","TV Hero (16:9)","aspect-video","seriesTvHeroInput","seriesTvHeroPreview")}
+            ${renderSeriesAppImageUpload(seriesId,"tvPosterUrl","TV Poster (2:3)","aspect-[2/3]","seriesTvPosterInput","seriesTvPosterPreview")}
+          </div>
+        </div>
+
+        <div class="card space-y-2">
+          <div class="flex items-center justify-between">
+            <div class="font-semibold">Seasons</div>
+            <button class="btn" onclick="addSeason('${seriesId}')">+ Add Season</button>
+          </div>
+          <div class="space-y-2">
+            ${
+              (s.seasons||[]).map((season, idx)=>`
+                <div class="card flex items-center justify-between">
+                  <div>
+                    <div class="font-semibold">Season ${season.seasonNumber}</div>
+                    <div class="text-xs text-white/60">${(season.episodes||[]).length} episodes</div>
+                  </div>
+                  <div class="flex gap-2">
+                    <button class="btn" onclick="navTo('seasonEdit:${seriesId}:${idx}')">Edit</button>
+                    <button class="btn" onclick="removeSeason('${seriesId}',${idx})">Remove</button>
+                  </div>
+                </div>
+              `).join("") || `<div class="text-white/60 text-sm">No seasons yet.</div>`
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSeriesAppImageUpload(id, field, label, aspect, inputId, previewId){
+  const s = getTitleById(id);
+  return `
+    <div class="space-y-2">
+      <div class="label">${label}</div>
+      <img id="${previewId}" src="${s.appImages?.[field]||''}"
+           class="w-full ${aspect} object-cover rounded-xl border border-white/10 bg-white/5"/>
+      <input id="${inputId}" type="file" accept="image/*" class="input"/>
+      <button class="btn w-full" onclick="uploadSeriesAppImage('${id}','${field}','${inputId}','${previewId}')">
+        Upload
+      </button>
+    </div>
+  `;
+}
+
+function toggleSeriesTVODFields(){
+  const enabled = document.getElementById("seriesTVODEnabled").checked;
+  document.getElementById("seriesTVODFields").classList.toggle("hidden", !enabled);
+}
+
+async function uploadSeriesPoster(seriesId){
+  const f = document.getElementById("seriesPosterInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/poster`);
+  const s = getTitleById(seriesId);
+  s.posterUrl = out.url;
+  saveState();
+  document.getElementById("seriesPosterPreview").src = out.url;
+}
+async function uploadSeriesHero(seriesId){
+  const f = document.getElementById("seriesHeroInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/hero`);
+  const s = getTitleById(seriesId);
+  s.heroUrl = out.url;
+  saveState();
+  document.getElementById("seriesHeroPreview").src = out.url;
+}
+async function uploadSeriesAppImage(seriesId, field, inputId, previewId){
+  const f = document.getElementById(inputId).files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/apps/${field}`);
+  const s = getTitleById(seriesId);
+  s.appImages = s.appImages || {};
+  s.appImages[field] = out.url;
+  saveState();
+  document.getElementById(previewId).src = out.url;
+}
+
+function saveSeries(seriesId){
+  const s = getTitleById(seriesId);
+  s.title = document.getElementById("seriesTitle").value.trim();
+  s.synopsis = document.getElementById("seriesSynopsis").value.trim();
+  s.genre = splitGenres(document.getElementById("seriesGenre").value);
+  s.releaseYear = document.getElementById("seriesReleaseYear").value.trim();
+  s.language = document.getElementById("seriesLanguage").value.trim();
+  s.trailerPlaybackId = document.getElementById("seriesTrailerPlaybackId").value.trim();
+  s.contentPlaybackId = document.getElementById("seriesContentPlaybackId").value.trim();
+  s.isPublished = document.getElementById("seriesPublished").checked;
+
+  s.monetization = s.monetization || {};
+  s.monetization.svod = document.getElementById("seriesSVOD").checked;
+  s.monetization.avod = document.getElementById("seriesAVOD").checked;
+  s.monetization.tvod = s.monetization.tvod || {};
+  s.monetization.tvod.enabled = document.getElementById("seriesTVODEnabled").checked;
+  s.monetization.tvod.rentalPrice = document.getElementById("seriesRentalPrice")?.value.trim() || "";
+  s.monetization.tvod.rentalWindowHours = Number(document.getElementById("seriesWindow")?.value || 48);
+  s.monetization.tvod.buyPrice = document.getElementById("seriesBuyPrice")?.value.trim() || "";
+
+  if(!s.monetization.svod && !s.monetization.avod && !s.monetization.tvod.enabled){
+    alert("Enable at least one monetization option.");
+    return;
+  }
+
+  saveState();
+  alert("Series saved.");
+}
+
+function addSeason(seriesId){
+  const s = getTitleById(seriesId);
+  const nextNum = (s.seasons||[]).length + 1;
+  s.seasons.push({
+    seasonNumber: nextNum,
+    title: `Season ${nextNum}`,
+    synopsis: "",
+    posterUrl: "",
+    heroUrl: "",
+    episodes: []
+  });
+  saveState();
+  navTo(`seasonEdit:${seriesId}:${nextNum-1}`);
+}
+
+function removeSeason(seriesId, seasonIndex){
+  const s = getTitleById(seriesId);
+  s.seasons.splice(seasonIndex,1);
+  s.seasons.forEach((x,i)=>x.seasonNumber=i+1);
+  saveState();
+  renderSeriesEdit(seriesId);
+}
+
+function renderSeasonEdit(seriesId, seasonIndex){
+  const main = document.getElementById("main");
+  const s = getTitleById(seriesId);
+  const season = s?.seasons?.[seasonIndex];
+  if(!season) return navTo("seriesEdit:"+seriesId);
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Season ${season.seasonNumber}</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveSeason('${seriesId}',${seasonIndex})">Save Season</button>
+      </div>
+    </div>
+
+    <div class="card space-y-3">
+      <div>
+        <div class="label">Season Title</div>
+        <input id="seasonTitle" class="input" value="${season.title||""}"/>
+      </div>
+      <div>
+        <div class="label">Season Synopsis</div>
+        <textarea id="seasonSynopsis" class="input" rows="3">${season.synopsis||""}</textarea>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div class="space-y-2">
+          <div class="label">Season Poster</div>
+          <img id="seasonPosterPreview" src="${season.posterUrl||''}"
+               class="w-full aspect-[2/3] object-cover rounded-xl border border-white/10 bg-white/5"/>
+          <input id="seasonPosterInput" type="file" accept="image/*" class="input"/>
+          <button class="btn w-full" onclick="uploadSeasonPoster('${seriesId}',${seasonIndex})">Upload Poster</button>
+        </div>
+        <div class="space-y-2">
+          <div class="label">Season Hero</div>
+          <img id="seasonHeroPreview" src="${season.heroUrl||''}"
+               class="w-full aspect-video object-cover rounded-xl border border-white/10 bg-white/5"/>
+          <input id="seasonHeroInput" type="file" accept="image/*" class="input"/>
+          <button class="btn w-full" onclick="uploadSeasonHero('${seriesId}',${seasonIndex})">Upload Hero</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card space-y-2">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold">Episodes</div>
+        <button class="btn" onclick="addEpisode('${seriesId}',${seasonIndex})">+ Add Episode</button>
+      </div>
+
+      <div class="space-y-2">
+        ${
+          (season.episodes||[]).map((ep, epIdx)=>`
+            <div class="card flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <img src="${ep.thumbnailUrl||''}" class="w-14 h-20 object-cover rounded-md bg-white/5 border border-white/10"/>
+                <div>
+                  <div class="font-semibold">E${ep.episodeNumber} — ${ep.title||"Untitled"}</div>
+                  <div class="text-xs text-white/60">${ep.runtimeMins||""} mins</div>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn" onclick="navTo('episodeEdit:${seriesId}:${seasonIndex}:${epIdx}')">Edit</button>
+                <button class="btn" onclick="removeEpisode('${seriesId}',${seasonIndex},${epIdx})">Remove</button>
+              </div>
+            </div>
+          `).join("") || `<div class="text-white/60 text-sm">No episodes yet.</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+async function uploadSeasonPoster(seriesId, seasonIndex){
+  const f = document.getElementById("seasonPosterInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/poster`);
+  const s = getTitleById(seriesId);
+  s.seasons[seasonIndex].posterUrl = out.url;
+  saveState();
+  document.getElementById("seasonPosterPreview").src = out.url;
+}
+async function uploadSeasonHero(seriesId, seasonIndex){
+  const f = document.getElementById("seasonHeroInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/hero`);
+  const s = getTitleById(seriesId);
+  s.seasons[seasonIndex].heroUrl = out.url;
+  saveState();
+  document.getElementById("seasonHeroPreview").src = out.url;
+}
+
+function saveSeason(seriesId, seasonIndex){
+  const s = getTitleById(seriesId);
+  const season = s.seasons[seasonIndex];
+  season.title = document.getElementById("seasonTitle").value.trim();
+  season.synopsis = document.getElementById("seasonSynopsis").value.trim();
+  saveState();
+  alert("Season saved.");
+}
+
+function addEpisode(seriesId, seasonIndex){
+  const s = getTitleById(seriesId);
+  const season = s.seasons[seasonIndex];
+  const nextNum = (season.episodes||[]).length + 1;
+
+  season.episodes.push({
+    id: uid("episode"),
+    episodeNumber: nextNum,
+    title: "",
+    synopsis: "",
+    runtimeMins: "",
+    thumbnailUrl: "",
+    trailerPlaybackId: "",
+    contentPlaybackId: "",
+    isPublished: false,
+    monetization: JSON.parse(JSON.stringify(s.monetization || {
+      svod:true,avod:false,tvod:{enabled:false,rentalPrice:"",rentalWindowHours:48,buyPrice:""}
+    })),
+    appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" }
+  });
+
+  saveState();
+  navTo(`episodeEdit:${seriesId}:${seasonIndex}:${nextNum-1}`);
+}
+
+function removeEpisode(seriesId, seasonIndex, epIndex){
+  const s = getTitleById(seriesId);
+  s.seasons[seasonIndex].episodes.splice(epIndex,1);
+  s.seasons[seasonIndex].episodes.forEach((x,i)=>x.episodeNumber=i+1);
+  saveState();
+  renderSeasonEdit(seriesId, seasonIndex);
+}
+
+function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
+  const main = document.getElementById("main");
+  const s = getTitleById(seriesId);
+  const ep = s?.seasons?.[seasonIndex]?.episodes?.[epIndex];
+  if(!ep) return navTo(`seasonEdit:${seriesId}:${seasonIndex}`);
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Edit Episode</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveEpisode('${seriesId}',${seasonIndex},${epIndex})">Save Episode</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6">
+      <div class="card space-y-2">
+        <div class="font-semibold">Episode Thumbnail (2:3)</div>
+        <div class="aspect-[2/3] bg-white/5 rounded-xl overflow-hidden border border-white/10">
+          <img id="epThumbPreview" src="${ep.thumbnailUrl||''}" class="w-full h-full object-cover"/>
+        </div>
+        <input id="epThumbInput" type="file" accept="image/*" class="input"/>
+        <button class="btn w-full" onclick="uploadEpisodeThumb('${seriesId}',${seasonIndex},${epIndex})">
+          Upload Thumbnail
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div class="card space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Episode #</div>
+              <input id="epNumber" class="input" value="${ep.episodeNumber}"/>
+            </div>
+            <div>
+              <div class="label">Runtime (mins)</div>
+              <input id="epRuntime" class="input" value="${ep.runtimeMins||""}"/>
+            </div>
+          </div>
+
+          <div>
+            <div class="label">Episode Title</div>
+            <input id="epTitle" class="input" value="${ep.title||""}"/>
+          </div>
+
+          <div>
+            <div class="label">Synopsis</div>
+            <textarea id="epSynopsis" class="input" rows="3">${ep.synopsis||""}</textarea>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Trailer Playback ID</div>
+              <input id="epTrailer" class="input" value="${ep.trailerPlaybackId||""}"/>
+            </div>
+            <div>
+              <div class="label">Content Playback ID</div>
+              <input id="epContent" class="input" value="${ep.contentPlaybackId||""}"/>
+            </div>
+          </div>
+
+          <label class="flex items-center gap-2 text-sm">
+            <input id="epPublished" type="checkbox" ${ep.isPublished?"checked":""}/>
+            Published
+          </label>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Episode Monetization</div>
+          <div class="flex flex-wrap gap-4 text-sm">
+            <label class="flex items-center gap-2"><input id="epSVOD" type="checkbox" ${ep.monetization?.svod?"checked":""}/> SVOD</label>
+            <label class="flex items-center gap-2"><input id="epAVOD" type="checkbox" ${ep.monetization?.avod?"checked":""}/> AVOD</label>
+            <label class="flex items-center gap-2"><input id="epTVODEnabled" type="checkbox" ${ep.monetization?.tvod?.enabled?"checked":""} onchange="toggleEpTVODFields()"/> TVOD</label>
+          </div>
+          <div id="epTVODFields" class="${ep.monetization?.tvod?.enabled?'':'hidden'} grid grid-cols-3 gap-3">
+            <div><div class="label">Rental Price ($)</div><input id="epRentalPrice" class="input" value="${ep.monetization?.tvod?.rentalPrice||""}"/></div>
+            <div><div class="label">Window (hrs)</div><input id="epWindow" class="input" value="${ep.monetization?.tvod?.rentalWindowHours||48}"/></div>
+            <div><div class="label">Buy Price ($)</div><input id="epBuyPrice" class="input" value="${ep.monetization?.tvod?.buyPrice||""}"/></div>
+          </div>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Episode App Images</div>
+          <div class="grid grid-cols-2 gap-3">
+            ${renderEpisodeAppImageUpload(seriesId,seasonIndex,epIndex,"mobileHeroUrl","Mobile Hero (9:16)")}
+            ${renderEpisodeAppImageUpload(seriesId,seasonIndex,epIndex,"mobilePosterUrl","Mobile Poster (2:3)")}
+            ${renderEpisodeAppImageUpload(seriesId,seasonIndex,epIndex,"tvHeroUrl","TV Hero (16:9)")}
+            ${renderEpisodeAppImageUpload(seriesId,seasonIndex,epIndex,"tvPosterUrl","TV Poster (2:3)")}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEpisodeAppImageUpload(seriesId, seasonIndex, epIndex, field, label){
+  const ep = getTitleById(seriesId).seasons[seasonIndex].episodes[epIndex];
+  const previewId = `ep_${field}_preview`;
+  const inputId = `ep_${field}_input`;
+  const aspect =
+    field.includes("mobileHero") ? "aspect-[9/16]" :
+    field.includes("Hero") ? "aspect-video" :
+    "aspect-[2/3]";
+
+  return `
+    <div class="space-y-2">
+      <div class="label">${label}</div>
+      <img id="${previewId}" src="${ep.appImages?.[field]||''}"
+           class="w-full ${aspect} object-cover rounded-xl border border-white/10 bg-white/5"/>
+      <input id="${inputId}" type="file" accept="image/*" class="input"/>
+      <button class="btn w-full"
+        onclick="uploadEpisodeAppImage('${seriesId}',${seasonIndex},${epIndex},'${field}','${inputId}','${previewId}')">
+        Upload
+      </button>
+    </div>
+  `;
+}
+
+function toggleEpTVODFields(){
+  const enabled = document.getElementById("epTVODEnabled").checked;
+  document.getElementById("epTVODFields").classList.toggle("hidden", !enabled);
+}
+
+async function uploadEpisodeThumb(seriesId, seasonIndex, epIndex){
+  const f = document.getElementById("epThumbInput").files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/episode-${epIndex+1}/thumb`);
+  const s = getTitleById(seriesId);
+  s.seasons[seasonIndex].episodes[epIndex].thumbnailUrl = out.url;
+  saveState();
+  document.getElementById("epThumbPreview").src = out.url;
+}
+
+async function uploadEpisodeAppImage(seriesId, seasonIndex, epIndex, field, inputId, previewId){
+  const f = document.getElementById(inputId).files[0];
+  if(!f) return;
+  const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/episode-${epIndex+1}/apps/${field}`);
+  const s = getTitleById(seriesId);
+  const ep = s.seasons[seasonIndex].episodes[epIndex];
+  ep.appImages = ep.appImages || {};
+  ep.appImages[field] = out.url;
+  saveState();
+  document.getElementById(previewId).src = out.url;
+}
+
+function saveEpisode(seriesId, seasonIndex, epIndex){
+  const s = getTitleById(seriesId);
+  const ep = s.seasons[seasonIndex].episodes[epIndex];
+
+  ep.episodeNumber = Number(document.getElementById("epNumber").value || ep.episodeNumber);
+  ep.title = document.getElementById("epTitle").value.trim();
+  ep.synopsis = document.getElementById("epSynopsis").value.trim();
+  ep.runtimeMins = document.getElementById("epRuntime").value.trim();
+  ep.trailerPlaybackId = document.getElementById("epTrailer").value.trim();
+  ep.contentPlaybackId = document.getElementById("epContent").value.trim();
+  ep.isPublished = document.getElementById("epPublished").checked;
+
+  ep.monetization = ep.monetization || {};
+  ep.monetization.svod = document.getElementById("epSVOD").checked;
+  ep.monetization.avod = document.getElementById("epAVOD").checked;
+  ep.monetization.tvod = ep.monetization.tvod || {};
+  ep.monetization.tvod.enabled = document.getElementById("epTVODEnabled").checked;
+  ep.monetization.tvod.rentalPrice = document.getElementById("epRentalPrice")?.value.trim() || "";
+  ep.monetization.tvod.rentalWindowHours = Number(document.getElementById("epWindow")?.value || 48);
+  ep.monetization.tvod.buyPrice = document.getElementById("epBuyPrice")?.value.trim() || "";
+
+  if(!ep.monetization.svod && !ep.monetization.avod && !ep.monetization.tvod.enabled){
+    alert("Enable at least one monetization option.");
+    return;
+  }
+
+  s.seasons[seasonIndex].episodes.sort((a,b)=>a.episodeNumber-b.episodeNumber);
+  s.seasons[seasonIndex].episodes.forEach((x,i)=>x.episodeNumber=i+1);
+
+  saveState();
+  alert("Episode saved.");
+}
+
+/* =========================================================
+   LOOP CHANNEL (rotation + sponsored ads)
+========================================================= */
+
+function renderLoop(){
+  const main = document.getElementById("main");
+  const loop = cmsState.loopChannel;
+  const allTitles = cmsState.titles.filter(t=>t.isPublished);
+
+  const episodeRefs = [];
+  byType("series").forEach(series=>{
+    (series.seasons||[]).forEach(season=>{
+      (season.episodes||[]).forEach(ep=>{
+        if(ep.isPublished){
+          episodeRefs.push({
+            refType:"episode",
+            refId: ep.id,
+            label: `${series.title||"Series"} S${season.seasonNumber}E${ep.episodeNumber} — ${ep.title||"Untitled"}`
+          });
+        }
+      });
+    });
+  });
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Loop Channel</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveLoop()">Save Loop</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div class="card space-y-3">
+        <div class="font-semibold">Rotation Items</div>
+
+        <div class="label">Add Published Title</div>
+        <select id="rotationTitleSelect" class="input">
+          <option value="">Select a title…</option>
+          ${allTitles.map(t=>`<option value="${t.id}">${typeBadge(t.type)} — ${t.title}</option>`).join("")}
+        </select>
+        <button class="btn w-full" onclick="addRotationTitle()">Add Title</button>
+
+        <div class="label mt-3">Add Published Episode</div>
+        <select id="rotationEpisodeSelect" class="input">
+          <option value="">Select an episode…</option>
+          ${episodeRefs.map(e=>`<option value="${e.refId}">${e.label}</option>`).join("")}
+        </select>
+        <button class="btn w-full" onclick="addRotationEpisode()">Add Episode</button>
+
+        <div class="mt-3 space-y-2">
+          ${
+            (loop.rotationItems||[]).map((r, idx)=>`
+              <div class="card flex items-center justify-between">
+                <div class="text-sm">${r.label}</div>
+                <div class="flex gap-2">
+                  <button class="btn" onclick="moveRotation(${idx},-1)">↑</button>
+                  <button class="btn" onclick="moveRotation(${idx},1)">↓</button>
+                  <button class="btn" onclick="removeRotation(${idx})">Remove</button>
+                </div>
+              </div>
+            `).join("") || `<div class="text-white/60 text-sm">No rotation items yet.</div>`
+          }
+        </div>
+      </div>
+
+      <div class="card space-y-3">
+        <div class="font-semibold">Sponsored Ads</div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <div class="label">Ad Frequency (mins)</div>
+            <input id="adFrequencyMins" class="input" value="${loop.adFrequencyMins||12}"/>
+          </div>
+          <label class="flex items-center gap-2 text-sm mt-5">
+            <input id="shuffleRotation" type="checkbox" ${loop.shuffle?"checked":""}/>
+            Shuffle Rotation
+          </label>
+        </div>
+
+        <div class="label mt-2">Upload Ad Video (under 4MB) OR set Mux Ad Playback ID</div>
+        <input id="adFileInput" type="file" accept="video/*" class="input"/>
+        <input id="adNameInput" class="input mt-2" placeholder="Ad Name"/>
+        <button class="btn w-full" onclick="uploadSponsoredAd()">Upload Ad</button>
+
+        <div class="mt-3 space-y-2">
+          ${
+            (loop.sponsoredAds||[]).map((ad, idx)=>`
+              <div class="card space-y-1">
+                <div class="flex items-center justify-between">
+                  <div class="font-semibold text-sm">${ad.name||"Ad"}</div>
+                  <button class="btn text-xs" onclick="removeAd(${idx})">Remove</button>
+                </div>
+                <div class="text-xs text-white/60 break-all">Blob URL: ${ad.fileUrl||""}</div>
+                <div class="text-xs text-white/60">
+                  Mux Ad Playback ID:
+                  <input class="input mt-1"
+                         value="${ad.muxAdPlaybackId||""}"
+                         onchange="setAdMuxId(${idx}, this.value)"/>
+                </div>
+              </div>
+            `).join("") || `<div class="text-white/60 text-sm">No ads uploaded.</div>`
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function addRotationTitle(){
+  const id = document.getElementById("rotationTitleSelect").value;
+  if(!id) return;
+  const t = getTitleById(id);
+  cmsState.loopChannel.rotationItems.push({
+    id: uid("rot"),
+    refType: "title",
+    refId: id,
+    label: `${typeBadge(t.type)} — ${t.title}`
+  });
+  saveState();
+  renderLoop();
+}
+
+function addRotationEpisode(){
+  const epId = document.getElementById("rotationEpisodeSelect").value;
+  if(!epId) return;
+
+  let label="Episode";
+  byType("series").forEach(series=>{
+    series.seasons.forEach(season=>{
+      season.episodes.forEach(ep=>{
+        if(ep.id===epId){
+          label = `${series.title} S${season.seasonNumber}E${ep.episodeNumber} — ${ep.title}`;
+        }
+      });
+    });
+  });
+
+  cmsState.loopChannel.rotationItems.push({
+    id: uid("rot"),
+    refType: "episode",
+    refId: epId,
+    label
+  });
+  saveState();
+  renderLoop();
+}
+
+function moveRotation(idx, dir){
+  const items = cmsState.loopChannel.rotationItems;
+  const ni = idx + dir;
+  if(ni<0||ni>=items.length) return;
+  [items[idx], items[ni]] = [items[ni], items[idx]];
+  saveState();
+  renderLoop();
+}
+
+function removeRotation(idx){
+  cmsState.loopChannel.rotationItems.splice(idx,1);
+  saveState();
+  renderLoop();
+}
+
+async function uploadSponsoredAd(){
+  const f = document.getElementById("adFileInput").files[0];
+  const name = document.getElementById("adNameInput").value.trim() || f?.name || "Ad";
+  if(!f) return;
+
+  const out = await uploadToBlob(f, `loop/ads/${uid("ad")}`);
+  cmsState.loopChannel.sponsoredAds.push({
+    id: uid("ad"),
+    name,
+    fileUrl: out.url,
+    muxAdPlaybackId: "",
+    durationSec: ""
+  });
+  saveState();
+  renderLoop();
+}
+
+function removeAd(idx){
+  cmsState.loopChannel.sponsoredAds.splice(idx,1);
+  saveState();
+  renderLoop();
+}
+
+function setAdMuxId(idx, v){
+  cmsState.loopChannel.sponsoredAds[idx].muxAdPlaybackId = v.trim();
+  saveState();
+}
+
+function saveLoop(){
+  cmsState.loopChannel.adFrequencyMins = Number(document.getElementById("adFrequencyMins").value || 12);
+  cmsState.loopChannel.shuffle = document.getElementById("shuffleRotation").checked;
+  saveState();
+  alert("Loop saved.");
+}
+
+/* =========================================================
+   USERS (placeholder)
+========================================================= */
+function renderUsersPlaceholder(){
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Users (Supabase)</h1>
+      <button class="btn" onclick="goBack()">Back</button>
+    </div>
+    <div class="card text-white/70">
+      Supabase user management + analytics live in Supabase.
+      Next: add profiles + watch_history tables and pull analytics via /api/analytics.
+    </div>
+  `;
+}
+
+/* =========================================================
+   SETTINGS (PayPal public config)
+========================================================= */
+
+function renderSettings(){
+  const main = document.getElementById("main");
+  const p = cmsState.payment || {};
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Settings</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveSettings()">Save Settings</button>
+      </div>
+    </div>
+
+    <div class="card space-y-3 max-w-2xl">
+      <div class="font-semibold">PayPal Gateway (Public)</div>
+
+      <div class="mt-3">
+        <div class="label">PayPal Client ID (public)</div>
+        <input id="paypalClientId" class="input" value="${p.paypalClientId||""}"/>
+      </div>
+
+      <div class="mt-3">
+        <div class="label">Environment</div>
+        <select id="paypalEnv" class="input">
+          <option value="sandbox" ${p.paypalEnv==="sandbox"?"selected":""}>Sandbox</option>
+          <option value="live" ${p.paypalEnv==="live"?"selected":""}>Live</option>
+        </select>
+      </div>
+
+      <div class="text-xs text-white/60 mt-3">
+        Never store PayPal Secret in this CMS. Keep secrets in backend env only.
+      </div>
+    </div>
+  `;
+}
+
+function saveSettings(){
+  cmsState.payment.paypalClientId = document.getElementById("paypalClientId").value.trim();
+  cmsState.payment.paypalEnv = document.getElementById("paypalEnv").value;
+  saveState();
+  alert("Settings saved.");
+}
+
+/* =========================================================
+   PUBLISH (Catalog + Manifest)
+   Requires /api/publish.js in same project
+========================================================= */
+
+function renderPublish(){
+  const main = document.getElementById("main");
+  const last = cmsState.lastPublished;
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Publish</h1>
+      <button class="btn" onclick="goBack()">Back</button>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div class="card space-y-3">
+        <div class="font-semibold">Publish Catalog</div>
+        <div class="text-sm text-white/70">
+          Publishes titles, series, seasons, episodes, monetization, app images, and loop channel.
+        </div>
+
+        <button class="btn btn-red w-full" onclick="publishCatalog()">Publish Catalog to Apps</button>
+
+        <div id="publishResult" class="text-xs text-white/60 break-all"></div>
+      </div>
+
+      <div class="card space-y-2">
+        <div class="font-semibold">Last Published</div>
+        <div class="text-sm text-white/70">
+          ${last ? new Date(last.time).toLocaleString() : "Never"}
+        </div>
+
+        ${last ? `
+          <div class="text-xs text-white/60 break-all">Manifest: ${last.manifestUrl}</div>
+          <div class="text-xs text-white/60 break-all">Catalog: ${last.catalogUrl}</div>
+        ` : ""}
+      </div>
+    </div>
+
+    <div class="card small muted">
+      <div class="font-semibold mb-1">Frontend Connection</div>
+      Your frontend must use the same Manifest URL emitted here. It reads Manifest.latestCatalogUrl, then renders catalog.
+    </div>
+  `;
+}
+
+function makePublishPayload(){
+  return {
+    version: cmsState.version + 1,
+    publishedAt: new Date().toISOString(),
+    titles: cmsState.titles,
+    loopChannel: cmsState.loopChannel,
+    paymentPublic: {
+      paypalClientId: cmsState.payment.paypalClientId,
+      paypalEnv: cmsState.payment.paypalEnv
+    }
+  };
+}
+
+async function publishCatalog(){
+  const payload = makePublishPayload();
+
+  const res = await fetch("/api/publish", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if(!res.ok){
+    const txt = await res.text();
+    alert("Publish failed: " + txt);
+    return;
+  }
+
+  const out = await res.json(); // { manifestUrl, catalogUrl }
+  cmsState.version = payload.version;
+  cmsState.lastPublished = { time: Date.now(), ...out };
+  saveState();
+
+  const el = document.getElementById("publishResult");
+  if(el){
+    el.innerHTML = `✅ Published<br/>Manifest: ${out.manifestUrl}<br/>Catalog: ${out.catalogUrl}`;
+  }
+
+  alert("Published!");
+}
+
+/* =====================
+   INIT
+===================== */
+navTo("dashboard", {push:false});
+</script>
+</body>
+</html>
