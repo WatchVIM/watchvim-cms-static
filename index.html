@@ -38,6 +38,7 @@
     .small { font-size:12px; }
     .danger { color:#ffb3b3; }
     a { color:#d4af37; }
+
     #debugPane {
       position: fixed; bottom: 10px; right: 10px; width: 360px; max-height: 40vh;
       background: rgba(0,0,0,.9); border:1px solid rgba(255,255,255,.12); border-radius: 12px;
@@ -53,7 +54,12 @@
   <!-- Sidebar -->
   <aside class="border-r border-white/10 p-4 space-y-3">
     <div class="flex items-center gap-2 mb-4">
-      <div class="w-9 h-9 rounded-xl bg-white/10 grid place-items-center font-black text-watchGold">V</div>
+      <!-- LOGO (replace src in production with /WatchVIM_New_OTT_Logo.png after adding to /public) -->
+      <img
+        src="/mnt/data/WatchVIM_New_OTT_Logo.png"
+        alt="WatchVIM Logo"
+        class="w-10 h-10 object-contain rounded-md bg-white/10 p-1"
+      />
       <div>
         <div class="text-lg font-bold">WatchVIM</div>
         <div class="text-xs text-white/60">CMS Portal</div>
@@ -111,8 +117,8 @@ window.addEventListener("unhandledrejection", (e)=> logDebug("Promise Rejection:
 ===================== */
 
 const LS_KEYS = {
-  CMS_STATE: "watchvim_cms_state_v8",
-  NAV_STACK: "watchvim_nav_stack_v8",
+  CMS_STATE: "watchvim_cms_state_v7",
+  NAV_STACK: "watchvim_nav_stack_v7",
 };
 
 function defaultState(){
@@ -153,11 +159,11 @@ function loadState(){
   try {
     const parsed = JSON.parse(raw);
     const merged = { ...defaultState(), ...parsed };
-    // ensure nested objects exist
-    merged.loopChannel = merged.loopChannel || defaultState().loopChannel;
-    merged.payment = merged.payment || defaultState().payment;
-    merged.publish = merged.publish || defaultState().publish;
-    merged.analytics = merged.analytics || defaultState().analytics;
+    // Ensure nested defaults exist even if older LS version
+    merged.loopChannel = { ...defaultState().loopChannel, ...(parsed.loopChannel||{}) };
+    merged.payment = { ...defaultState().payment, ...(parsed.payment||{}) };
+    merged.publish = { ...defaultState().publish, ...(parsed.publish||{}) };
+    merged.analytics = { ...defaultState().analytics, ...(parsed.analytics||{}) };
     return merged;
   } catch {
     return defaultState();
@@ -228,7 +234,6 @@ function render(route){
 
 /* =====================
    UPLOAD (server -> Vercel Blob)
-   Requires /api/upload.js (Node) in same project
 ===================== */
 
 async function uploadToBlob(file, keyPrefix="watchvim"){
@@ -529,8 +534,8 @@ function renderAppImageUpload(id, field, label, aspect, inputId, previewId){
 }
 
 function toggleTVODFields(){
-  const enabled = document.getElementById("tvodEnabled").checked;
-  document.getElementById("tvodFields").classList.toggle("hidden", !enabled);
+  const enabled = document.getElementById("tvodEnabled")?.checked;
+  document.getElementById("tvodFields")?.classList.toggle("hidden", !enabled);
 }
 
 async function uploadPoster(id){
@@ -1154,8 +1159,6 @@ function removeSponsoredAd(adId){
 
 function renderLoop(){
   const main = document.getElementById("main");
-  cmsState.loopChannel = cmsState.loopChannel || defaultState().loopChannel;
-
   const loop = cmsState.loopChannel;
   const { titles, episodes } = flattenAllRefs();
 
@@ -1265,7 +1268,8 @@ function renderLoop(){
 
 /* =========================================================
    USERS — SUPABASE ADMIN LITE
-   ⚠️ stores service-role key in localStorage (private CMS only)
+   ⚠️ Stores service key in localStorage.
+   Use ONLY for your private CMS.
 ========================================================= */
 
 const SUPA_LS = "watchvim_supabase_admin_cfg_v1";
@@ -1301,6 +1305,7 @@ async function initSupaAdmin(){
   });
 
   saveSupaCfg({ url, key });
+  alert("Supabase connected.");
   return supaAdminClient;
 }
 
@@ -1385,11 +1390,8 @@ function renderUsersPlaceholder(){
 
 function renderSettings(){
   const main = document.getElementById("main");
-  cmsState.payment = cmsState.payment || defaultState().payment;
-  cmsState.publish = cmsState.publish || defaultState().publish;
-
-  const p = cmsState.payment;
-  const pub = cmsState.publish;
+  const p = cmsState.payment || {};
+  const pub = cmsState.publish || {};
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1441,8 +1443,8 @@ function renderSettings(){
 }
 
 function saveSettings(){
-  cmsState.payment = cmsState.payment || defaultState().payment;
-  cmsState.publish = cmsState.publish || defaultState().publish;
+  cmsState.payment = cmsState.payment || {};
+  cmsState.publish = cmsState.publish || {};
 
   cmsState.payment.paypalClientId = document.getElementById("paypalClientId").value.trim();
   cmsState.payment.paypalEnv = document.getElementById("paypalEnv").value;
@@ -1459,7 +1461,7 @@ function saveSettings(){
 function renderPublish(){
   const main = document.getElementById("main");
   const last = cmsState.lastPublished;
-  const stableManifestKey = cmsState.publish?.stableManifestKey || "manifest.json";
+  const stableManifestKey = cmsState.publish.stableManifestKey || "manifest.json";
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1472,7 +1474,7 @@ function renderPublish(){
         <div class="font-semibold">Publish Catalog (Stable)</div>
         <div class="text-sm text-white/70">
           Publishes ONLY items with “Published” checked.
-          Overwrites stable <code>${cmsState.publish?.stableCatalogKey}</code> and <code>${stableManifestKey}</code>.
+          Overwrites stable <code>${cmsState.publish.stableCatalogKey}</code> and <code>${stableManifestKey}</code>.
         </div>
 
         <button class="btn btn-red w-full" onclick="publishCatalog()">Publish to Apps</button>
@@ -1494,10 +1496,6 @@ function renderPublish(){
 }
 
 function onlyPublishedPayload(){
-  cmsState.loopChannel = cmsState.loopChannel || defaultState().loopChannel;
-  cmsState.payment = cmsState.payment || defaultState().payment;
-  cmsState.publish = cmsState.publish || defaultState().publish;
-
   const titles = cmsState.titles
     .filter(t => t.isPublished)
     .map(t => {
@@ -1512,7 +1510,7 @@ function onlyPublishedPayload(){
     });
 
   return {
-    version: (cmsState.version || 1) + 1,
+    version: (cmsState.version||1) + 1,
     publishedAt: new Date().toISOString(),
     titles,
     loopChannel: cmsState.loopChannel,
