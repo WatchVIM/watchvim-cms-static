@@ -1,6 +1,6 @@
 import { put } from "@vercel/blob";
 
-export const config = { runtime: "nodejs" }; // <-- IMPORTANT
+export const config = { runtime: "nodejs" }; // <-- change from edge
 
 export default async function handler(req) {
   if (req.method !== "POST") {
@@ -11,7 +11,7 @@ export default async function handler(req) {
   const file = form.get("file");
   const keyPrefix = form.get("keyPrefix") || "watchvim";
 
-  if (!file || typeof file === "string") {
+  if (!file) {
     return new Response("Missing file", { status: 400 });
   }
 
@@ -20,7 +20,6 @@ export default async function handler(req) {
   const blob = await put(pathname, file, {
     access: "public",
     addRandomSuffix: true
-    // token not needed here IF env var is set
   });
 
   return Response.json({ url: blob.url });
