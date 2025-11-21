@@ -111,8 +111,8 @@ window.addEventListener("unhandledrejection", (e)=> logDebug("Promise Rejection:
 ===================== */
 
 const LS_KEYS = {
-  CMS_STATE: "watchvim_cms_state_v7",
-  NAV_STACK: "watchvim_nav_stack_v7",
+  CMS_STATE: "watchvim_cms_state_v8",
+  NAV_STACK: "watchvim_nav_stack_v8",
 };
 
 function defaultState(){
@@ -145,14 +145,20 @@ function defaultState(){
 
 let cmsState = loadState();
 let navStack = loadNavStack();
-window.__watchvimCMS = cmsState; // easy inspection in console if needed
+window.__watchvimCMS = cmsState;
 
 function loadState(){
   const raw = localStorage.getItem(LS_KEYS.CMS_STATE);
   if(!raw) return defaultState();
   try {
     const parsed = JSON.parse(raw);
-    return { ...defaultState(), ...parsed };
+    const merged = { ...defaultState(), ...parsed };
+    // ensure nested objects exist
+    merged.loopChannel = merged.loopChannel || defaultState().loopChannel;
+    merged.payment = merged.payment || defaultState().payment;
+    merged.publish = merged.publish || defaultState().publish;
+    merged.analytics = merged.analytics || defaultState().analytics;
+    return merged;
   } catch {
     return defaultState();
   }
@@ -759,9 +765,6 @@ function renderSeriesEdit(seriesId){
   `;
 }
 
-/* --- uploads + saves for series/season/episode remain same as your version,
-       except indices already numeric from router. --- */
-
 async function uploadSeriesPoster(seriesId){
   try{
     const f = document.getElementById("seriesPosterInput").files[0];
@@ -1039,19 +1042,230 @@ function saveEpisode(seriesId, seasonIndex, epIndex){
 }
 
 /* =========================================================
-   LOOP CHANNEL
+   LOOP CHANNEL — EDITOR
 ========================================================= */
-/* (your loop code is fine; left as-is for size)
-   If you want me to paste the loop + publish + settings blocks back in,
-   say so and I’ll drop the rest. */
+
+function flattenAllRefs(){
+  const titles = cmsState.titles.filter(t => t.type !== "series");
+  const series = cmsState.titles.filter(t => t.type === "series");
+
+  const episodes = [];
+  series.forEach(s => {
+    (s.seasons||[]).forEach((season, si) => {
+      (season.episodes||[]).forEach((ep, ei) => {
+        episodes.push({
+          id: ep.id,
+          label: `${s.title||"Series"} — S${season.seasonNumber||si+1}E${ep.episodeNumber||ei+1} • ${ep.title||"Untitled"}`,
+          seriesId: s.id
+        });
+      });
+    });
+  });
+
+  return { titles, episodes, series };
+}
+
+function addRotationItem(){
+  const sel = document.getElementById("loopAddSelect");
+  const val = sel.value;
+  if(!val) return;
+
+  const [refType, refId] = val.split("|");
+  const { titles, episodes } = flattenAllRefs();
+
+  let label = "";
+  if(refType === "title"){
+    const t = titles.find(x => x.id === refId) || getTitleById(refId);
+    label = t?.title || "Untitled Title";
+  } else {
+    const ep = episodes.find(x => x.id === refId);
+    label = ep?.label || "Untitled Episode";
+  }
+
+  cmsState.loopChannel.rotationItems.push({
+    id: uid("loopItem"),
+    refType,
+    refId,
+    label
+  });
+
+  saveState();
+  renderLoop();
+}
+
+function removeRotationItem(itemId){
+  cmsState.loopChannel.rotationItems =
+    cmsState.loopChannel.rotationItems.filter(x => x.id !== itemId);
+  saveState();
+  renderLoop();
+}
+
+function moveRotationItem(itemId, dir){
+  const items = cmsState.loopChannel.rotationItems;
+  const idx = items.findIndex(x => x.id === itemId);
+  if(idx < 0) return;
+  const newIdx = idx + dir;
+  if(newIdx < 0 || newIdx >= items.length) return;
+  const [it] = items.splice(idx,1);
+  items.splice(newIdx,0,it);
+  saveState();
+  renderLoop();
+}
+
+function saveLoopSettings(){
+  cmsState.loopChannel.adFrequencyMins =
+    Number(document.getElementById("adFrequencyMins").value || 12);
+  cmsState.loopChannel.shuffle =
+    document.getElementById("loopShuffle").checked;
+  saveState();
+  alert("Loop settings saved.");
+}
+
+async function addSponsoredAd(){
+  const name = document.getElementById("adName").value.trim();
+  const muxAdPlaybackId = document.getElementById("adMuxId").value.trim();
+  const durationSec = Number(document.getElementById("adDuration").value || 15);
+  const file = document.getElementById("adFile").files[0];
+
+  let fileUrl = "";
+  if(file){
+    const out = await uploadToBlob(file, "loop/ads");
+    fileUrl = out.url;
+  }
+
+  cmsState.loopChannel.sponsoredAds.push({
+    id: uid("ad"),
+    name,
+    fileUrl,
+    muxAdPlaybackId,
+    durationSec
+  });
+
+  saveState();
+  renderLoop();
+}
+
+function removeSponsoredAd(adId){
+  cmsState.loopChannel.sponsoredAds =
+    cmsState.loopChannel.sponsoredAds.filter(a => a.id !== adId);
+  saveState();
+  renderLoop();
+}
+
+function renderLoop(){
+  const main = document.getElementById("main");
+  cmsState.loopChannel = cmsState.loopChannel || defaultState().loopChannel;
+
+  const loop = cmsState.loopChannel;
+  const { titles, episodes } = flattenAllRefs();
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Loop Channel</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveLoopSettings()">Save Loop</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+      <div class="card space-y-3">
+        <div class="font-semibold">Rotation</div>
+
+        <div class="flex gap-2">
+          <select id="loopAddSelect" class="input">
+            <option value="">+ Add title or episode…</option>
+            <optgroup label="Titles">
+              ${titles.map(t=>`
+                <option value="title|${t.id}">
+                  ${t.title||"Untitled"} (${typeBadge(t.type)})
+                </option>
+              `).join("")}
+            </optgroup>
+            <optgroup label="Episodes">
+              ${episodes.map(ep=>`
+                <option value="episode|${ep.id}">
+                  ${ep.label}
+                </option>
+              `).join("")}
+            </optgroup>
+          </select>
+          <button class="btn" onclick="addRotationItem()">Add</button>
+        </div>
+
+        <div class="space-y-2">
+          ${
+            (loop.rotationItems||[]).map((it, i)=>`
+              <div class="card flex items-center justify-between">
+                <div class="text-sm">
+                  <div class="font-semibold">${i+1}. ${it.label}</div>
+                  <div class="text-xs text-white/60">${it.refType} • ${it.refId}</div>
+                </div>
+                <div class="flex gap-1">
+                  <button class="btn" onclick="moveRotationItem('${it.id}',-1)">↑</button>
+                  <button class="btn" onclick="moveRotationItem('${it.id}',1)">↓</button>
+                  <button class="btn" onclick="removeRotationItem('${it.id}')">Remove</button>
+                </div>
+              </div>
+            `).join("") || `<div class="text-white/60 text-sm">No rotation items yet.</div>`
+          }
+        </div>
+      </div>
+
+      <div class="card space-y-3">
+        <div class="font-semibold">Loop Settings</div>
+
+        <div>
+          <div class="label">Ad Frequency (mins)</div>
+          <input id="adFrequencyMins" class="input" value="${loop.adFrequencyMins||12}" />
+        </div>
+
+        <label class="flex items-center gap-2 text-sm">
+          <input id="loopShuffle" type="checkbox" ${loop.shuffle?"checked":""}/>
+          Shuffle Rotation
+        </label>
+
+        <div class="text-xs text-white/60">
+          Rotation items will play in order unless shuffle is enabled.
+        </div>
+      </div>
+    </div>
+
+    <div class="card space-y-3">
+      <div class="font-semibold">Sponsored Ads (optional)</div>
+
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <input id="adName" class="input" placeholder="Ad name"/>
+        <input id="adMuxId" class="input" placeholder="Mux Ad Playback ID (optional)"/>
+        <input id="adDuration" class="input" placeholder="Duration sec" value="15"/>
+        <input id="adFile" type="file" accept="video/*,image/*" class="input"/>
+      </div>
+      <button class="btn" onclick="addSponsoredAd()">+ Add Sponsored Ad</button>
+
+      <div class="space-y-2">
+        ${
+          (loop.sponsoredAds||[]).map(ad=>`
+            <div class="card flex items-center justify-between">
+              <div>
+                <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
+                <div class="text-xs text-white/60">
+                  ${ad.durationSec||15}s • ${ad.muxAdPlaybackId||"no mux id"}
+                </div>
+                ${ad.fileUrl ? `<div class="text-xs break-all">${ad.fileUrl}</div>` : ""}
+              </div>
+              <button class="btn" onclick="removeSponsoredAd('${ad.id}')">Remove</button>
+            </div>
+          `).join("") || `<div class="text-white/60 text-sm">No sponsored ads yet.</div>`
+        }
+      </div>
+    </div>
+  `;
+}
 
 /* =========================================================
-   USERS + SETTINGS + PUBLISH
-========================================================= */
-/* =========================================================
    USERS — SUPABASE ADMIN LITE
-   ⚠️ This stores a service-role key in localStorage.
-   Use ONLY for your private/internal CMS.
+   ⚠️ stores service-role key in localStorage (private CMS only)
 ========================================================= */
 
 const SUPA_LS = "watchvim_supabase_admin_cfg_v1";
@@ -1164,23 +1378,18 @@ function renderUsersPlaceholder(){
     <div id="usersTable" class="mt-4"></div>
   `;
 }
-  const main = document.getElementById("main");
-  main.innerHTML = `
-    <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-bold">Users (Supabase)</h1>
-      <button class="btn" onclick="goBack()">Back</button>
-    </div>
-    <div class="card text-white/70">
-      Supabase user management + analytics live in Supabase.
-      Next: add profiles + watch_history tables and pull analytics via /api/analytics.
-    </div>
-  `;
-}
+
+/* =========================================================
+   SETTINGS
+========================================================= */
 
 function renderSettings(){
   const main = document.getElementById("main");
-  const p = cmsState.payment || {};
-  const pub = cmsState.publish || {};
+  cmsState.payment = cmsState.payment || defaultState().payment;
+  cmsState.publish = cmsState.publish || defaultState().publish;
+
+  const p = cmsState.payment;
+  const pub = cmsState.publish;
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1232,6 +1441,9 @@ function renderSettings(){
 }
 
 function saveSettings(){
+  cmsState.payment = cmsState.payment || defaultState().payment;
+  cmsState.publish = cmsState.publish || defaultState().publish;
+
   cmsState.payment.paypalClientId = document.getElementById("paypalClientId").value.trim();
   cmsState.payment.paypalEnv = document.getElementById("paypalEnv").value;
   cmsState.publish.stableManifestKey = document.getElementById("stableManifestKey").value.trim() || "manifest.json";
@@ -1240,10 +1452,14 @@ function saveSettings(){
   alert("Settings saved.");
 }
 
+/* =========================================================
+   PUBLISH
+========================================================= */
+
 function renderPublish(){
   const main = document.getElementById("main");
   const last = cmsState.lastPublished;
-  const stableManifestKey = cmsState.publish.stableManifestKey || "manifest.json";
+  const stableManifestKey = cmsState.publish?.stableManifestKey || "manifest.json";
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1256,7 +1472,7 @@ function renderPublish(){
         <div class="font-semibold">Publish Catalog (Stable)</div>
         <div class="text-sm text-white/70">
           Publishes ONLY items with “Published” checked.
-          Overwrites stable <code>${cmsState.publish.stableCatalogKey}</code> and <code>${stableManifestKey}</code>.
+          Overwrites stable <code>${cmsState.publish?.stableCatalogKey}</code> and <code>${stableManifestKey}</code>.
         </div>
 
         <button class="btn btn-red w-full" onclick="publishCatalog()">Publish to Apps</button>
@@ -1278,6 +1494,10 @@ function renderPublish(){
 }
 
 function onlyPublishedPayload(){
+  cmsState.loopChannel = cmsState.loopChannel || defaultState().loopChannel;
+  cmsState.payment = cmsState.payment || defaultState().payment;
+  cmsState.publish = cmsState.publish || defaultState().publish;
+
   const titles = cmsState.titles
     .filter(t => t.isPublished)
     .map(t => {
@@ -1292,7 +1512,7 @@ function onlyPublishedPayload(){
     });
 
   return {
-    version: cmsState.version + 1,
+    version: (cmsState.version || 1) + 1,
     publishedAt: new Date().toISOString(),
     titles,
     loopChannel: cmsState.loopChannel,
@@ -1337,231 +1557,6 @@ async function publishCatalog(){
     logDebug("publishCatalog failed: " + e.message);
     alert("Publish failed: " + e.message);
   }
-}
-
-/* =====================
-   LOOP (same as your version)
-===================== */
-function renderLoop()
-  /* =========================================================
-   LOOP CHANNEL — EDITOR
-========================================================= */
-
-function flattenAllRefs(){
-  const titles = cmsState.titles.filter(t => t.type !== "series");
-  const series = cmsState.titles.filter(t => t.type === "series");
-
-  const episodes = [];
-  series.forEach(s => {
-    (s.seasons||[]).forEach((season, si) => {
-      (season.episodes||[]).forEach((ep, ei) => {
-        episodes.push({
-          id: ep.id,
-          label: `${s.title||"Series"} — S${season.seasonNumber||si+1}E${ep.episodeNumber||ei+1} • ${ep.title||"Untitled"}`,
-          seriesId: s.id
-        });
-      });
-    });
-  });
-
-  return { titles, episodes, series };
-}
-
-function addRotationItem(){
-  const sel = document.getElementById("loopAddSelect");
-  const val = sel.value;
-  if(!val) return;
-
-  const [refType, refId] = val.split("|");
-  const { titles, episodes } = flattenAllRefs();
-
-  let label = "";
-  if(refType === "title"){
-    const t = titles.find(x => x.id === refId) || getTitleById(refId);
-    label = t?.title || "Untitled Title";
-  } else {
-    const ep = episodes.find(x => x.id === refId);
-    label = ep?.label || "Untitled Episode";
-  }
-
-  cmsState.loopChannel.rotationItems.push({
-    id: uid("loopItem"),
-    refType,
-    refId,
-    label
-  });
-
-  saveState();
-  renderLoop();
-}
-
-function removeRotationItem(itemId){
-  cmsState.loopChannel.rotationItems =
-    cmsState.loopChannel.rotationItems.filter(x => x.id !== itemId);
-  saveState();
-  renderLoop();
-}
-
-function moveRotationItem(itemId, dir){
-  const items = cmsState.loopChannel.rotationItems;
-  const idx = items.findIndex(x => x.id === itemId);
-  if(idx < 0) return;
-  const newIdx = idx + dir;
-  if(newIdx < 0 || newIdx >= items.length) return;
-  const [it] = items.splice(idx,1);
-  items.splice(newIdx,0,it);
-  saveState();
-  renderLoop();
-}
-
-function saveLoopSettings(){
-  cmsState.loopChannel.adFrequencyMins =
-    Number(document.getElementById("adFrequencyMins").value || 12);
-  cmsState.loopChannel.shuffle =
-    document.getElementById("loopShuffle").checked;
-  saveState();
-  alert("Loop settings saved.");
-}
-
-async function addSponsoredAd(){
-  const name = document.getElementById("adName").value.trim();
-  const muxAdPlaybackId = document.getElementById("adMuxId").value.trim();
-  const durationSec = Number(document.getElementById("adDuration").value || 15);
-  const file = document.getElementById("adFile").files[0];
-
-  let fileUrl = "";
-  if(file){
-    // NOTE: 4MB limit still applies in uploadToBlob
-    const out = await uploadToBlob(file, "loop/ads");
-    fileUrl = out.url;
-  }
-
-  cmsState.loopChannel.sponsoredAds.push({
-    id: uid("ad"),
-    name,
-    fileUrl,
-    muxAdPlaybackId,
-    durationSec
-  });
-
-  saveState();
-  renderLoop();
-}
-
-function removeSponsoredAd(adId){
-  cmsState.loopChannel.sponsoredAds =
-    cmsState.loopChannel.sponsoredAds.filter(a => a.id !== adId);
-  saveState();
-  renderLoop();
-}
-
-function renderLoop(){
-  const main = document.getElementById("main");
-  const loop = cmsState.loopChannel;
-  const { titles, episodes } = flattenAllRefs();
-
-  main.innerHTML = `
-    <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-bold">Loop Channel</h1>
-      <div class="flex gap-2">
-        <button class="btn" onclick="goBack()">Back</button>
-        <button class="btn btn-red" onclick="saveLoopSettings()">Save Loop</button>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-      <div class="card space-y-3">
-        <div class="font-semibold">Rotation</div>
-
-        <div class="flex gap-2">
-          <select id="loopAddSelect" class="input">
-            <option value="">+ Add title or episode…</option>
-            <optgroup label="Titles">
-              ${titles.map(t=>`
-                <option value="title|${t.id}">
-                  ${t.title||"Untitled"} (${typeBadge(t.type)})
-                </option>
-              `).join("")}
-            </optgroup>
-            <optgroup label="Episodes">
-              ${episodes.map(ep=>`
-                <option value="episode|${ep.id}">
-                  ${ep.label}
-                </option>
-              `).join("")}
-            </optgroup>
-          </select>
-          <button class="btn" onclick="addRotationItem()">Add</button>
-        </div>
-
-        <div class="space-y-2">
-          ${
-            (loop.rotationItems||[]).map((it, i)=>`
-              <div class="card flex items-center justify-between">
-                <div class="text-sm">
-                  <div class="font-semibold">${i+1}. ${it.label}</div>
-                  <div class="text-xs text-white/60">${it.refType} • ${it.refId}</div>
-                </div>
-                <div class="flex gap-1">
-                  <button class="btn" onclick="moveRotationItem('${it.id}',-1)">↑</button>
-                  <button class="btn" onclick="moveRotationItem('${it.id}',1)">↓</button>
-                  <button class="btn" onclick="removeRotationItem('${it.id}')">Remove</button>
-                </div>
-              </div>
-            `).join("") || `<div class="text-white/60 text-sm">No rotation items yet.</div>`
-          }
-        </div>
-      </div>
-
-      <div class="card space-y-3">
-        <div class="font-semibold">Loop Settings</div>
-
-        <div>
-          <div class="label">Ad Frequency (mins)</div>
-          <input id="adFrequencyMins" class="input" value="${loop.adFrequencyMins||12}" />
-        </div>
-
-        <label class="flex items-center gap-2 text-sm">
-          <input id="loopShuffle" type="checkbox" ${loop.shuffle?"checked":""}/>
-          Shuffle Rotation
-        </label>
-
-        <div class="text-xs text-white/60">
-          Rotation items will play in order unless shuffle is enabled.
-        </div>
-      </div>
-    </div>
-
-    <div class="card space-y-3">
-      <div class="font-semibold">Sponsored Ads (optional)</div>
-
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
-        <input id="adName" class="input" placeholder="Ad name"/>
-        <input id="adMuxId" class="input" placeholder="Mux Ad Playback ID (optional)"/>
-        <input id="adDuration" class="input" placeholder="Duration sec" value="15"/>
-        <input id="adFile" type="file" accept="video/*,image/*" class="input"/>
-      </div>
-      <button class="btn" onclick="addSponsoredAd()">+ Add Sponsored Ad</button>
-
-      <div class="space-y-2">
-        ${
-          (loop.sponsoredAds||[]).map(ad=>`
-            <div class="card flex items-center justify-between">
-              <div>
-                <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
-                <div class="text-xs text-white/60">
-                  ${ad.durationSec||15}s • ${ad.muxAdPlaybackId||"no mux id"}
-                </div>
-                ${ad.fileUrl ? `<div class="text-xs break-all">${ad.fileUrl}</div>` : ""}
-              </div>
-              <button class="btn" onclick="removeSponsoredAd('${ad.id}')">Remove</button>
-            </div>
-          `).join("") || `<div class="text-white/60 text-sm">No sponsored ads yet.</div>`
-        }
-      </div>
-    </div>
-  `;
 }
 
 /* =====================
