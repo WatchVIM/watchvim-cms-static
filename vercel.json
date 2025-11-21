@@ -1,8 +1,7 @@
 {
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "functions": {
-    "api/*.js": {
-      "runtime": "nodejs20.x"
-    }
+    "api/publish.js": { "runtime": "nodejs20.x" },
+    "api/upload.js": { "runtime": "edge" }
   }
 }
