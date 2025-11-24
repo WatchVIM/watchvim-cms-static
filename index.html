@@ -1641,7 +1641,7 @@ function renderAdvertising(){
                 <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
                 <div class="text-xs text-white/60">
                   ${ad.durationSec||15}s
-                  ${ad.skippable ? `• skippable after ${ad.skipAfterSec||5}s` : "• not skippable"}
+                  ${ad.skippable ? \`• skippable after ${ad.skipAfterSec||5}s\` : "• not skippable"}
                 </div>
                 ${ad.mediaUrl ? `<div class="text-xs break-all">${ad.mediaUrl}</div>` : ""}
                 ${ad.muxPlaybackId ? `<div class="text-xs break-all muted">mux:${ad.muxPlaybackId}</div>` : ""}
@@ -1758,7 +1758,7 @@ function renderUsersTable(users){
             <div class="font-semibold text-sm">${u.email || "no-email"}</div>
             <div class="text-xs text-white/60">
               created: ${new Date(u.created_at).toLocaleString()}
-              ${u.last_sign_in_at ? `• last login: ${new Date(u.last_sign_in_at).toLocaleString()}` : ""}
+              ${u.last_sign_in_at ? \`• last login: ${new Date(u.last_sign_in_at).toLocaleString()}\` : ""}
             </div>
           </div>
           <div class="text-xs pill">${u.role || "authenticated"}</div>
