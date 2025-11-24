@@ -1,1 +1,48 @@
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+export default async function handler(req, res) {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const jwt = authHeader.replace("Bearer ", "");
+    if (!jwt) return res.status(401).json({ error: "Missing auth token" });
+
+    const { data: userData, error: userErr } =
+      await supabaseAdmin.auth.getUser(jwt);
+
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Invalid user token" });
+    }
+
+    const userId = userData.user.id;
+
+    const { data: sub } = await supabaseAdmin
+      .from("user_subscriptions")
+      .select("plan_id,status,started_at,current_period_end,cancel_at_period_end")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const active =
+      sub?.status === "ACTIVE" ||
+      sub?.status === "APPROVAL_PENDING" ||
+      sub?.status === "APPROVED";
+
+    return res.status(200).json({
+      active,
+      planId: sub?.plan_id || null,
+      status: sub?.status || "NONE",
+      startedAt: sub?.started_at || null,
+      periodEnd: sub?.current_period_end || null,
+      cancelAtPeriodEnd: sub?.cancel_at_period_end || false,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+}
 
