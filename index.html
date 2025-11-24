@@ -59,9 +59,9 @@
   <!-- Sidebar -->
   <aside class="border-r border-white/10 p-4 space-y-3">
     <div class="flex items-center gap-2 mb-4">
-      <!-- LOGO -->
+      <!-- LOGO (put file in your public root or change URL) -->
       <img
-        src="/mnt/data/WatchVIM_New_OTT_Logo.png"
+        src="./WatchVIM_New_OTT_Logo.png"
         alt="WatchVIM Logo"
         class="w-10 h-10 object-contain rounded-md bg-white/10 p-1"
       />
@@ -1635,13 +1635,16 @@ function renderAdvertising(){
       <div class="font-semibold">Global Ad Inventory</div>
       <div class="space-y-2">
         ${
-          (a.globalAds||[]).map(ad=>`
+          (a.globalAds||[]).map(ad=>{
+            const skipText = ad.skippable
+              ? ('• skippable after ' + (ad.skipAfterSec||5) + 's')
+              : '• not skippable';
+            return `
             <div class="card flex items-center justify-between">
               <div class="space-y-1">
                 <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
                 <div class="text-xs text-white/60">
-                  ${ad.durationSec||15}s
-                  ${ad.skippable ? \`• skippable after ${ad.skipAfterSec||5}s\` : "• not skippable"}
+                  ${ad.durationSec||15}s ${skipText}
                 </div>
                 ${ad.mediaUrl ? `<div class="text-xs break-all">${ad.mediaUrl}</div>` : ""}
                 ${ad.muxPlaybackId ? `<div class="text-xs break-all muted">mux:${ad.muxPlaybackId}</div>` : ""}
@@ -1649,7 +1652,8 @@ function renderAdvertising(){
               </div>
               <button class="btn" onclick="removeGlobalAd('${ad.id}')">Remove</button>
             </div>
-          `).join("") || `<div class="text-white/60 text-sm">No global ads yet.</div>`
+          `;
+          }).join("") || `<div class="text-white/60 text-sm">No global ads yet.</div>`
         }
       </div>
     </div>
@@ -1752,18 +1756,23 @@ function renderUsersTable(users){
   el.innerHTML = `
     <div class="text-xs text-white/60 mb-2">${users.length} users</div>
     <div class="space-y-2">
-      ${users.map(u=>`
+      ${users.map(u=>{
+        const lastLogin = u.last_sign_in_at
+          ? ('• last login: ' + new Date(u.last_sign_in_at).toLocaleString())
+          : "";
+        return `
         <div class="card flex items-center justify-between">
           <div>
             <div class="font-semibold text-sm">${u.email || "no-email"}</div>
             <div class="text-xs text-white/60">
               created: ${new Date(u.created_at).toLocaleString()}
-              ${u.last_sign_in_at ? \`• last login: ${new Date(u.last_sign_in_at).toLocaleString()}\` : ""}
+              ${lastLogin}
             </div>
           </div>
           <div class="text-xs pill">${u.role || "authenticated"}</div>
         </div>
-      `).join("") || `<div class="text-white/60 text-sm">No users returned.</div>`}
+      `;
+      }).join("") || `<div class="text-white/60 text-sm">No users returned.</div>`}
     </div>
   `;
 }
@@ -2117,9 +2126,9 @@ function renderPublish(){
 function sanitizePathKey(key){
   return (key||"")
     .trim()
-    .replace(/^\/+/, "")      // no leading slash
-    .replace(/\/{2,}/g, "/") // collapse double slashes
-    .replace(/\s+/g, "-");   // spaces to dashes
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/")
+    .replace(/\s+/g, "-");
 }
 
 function onlyPublishedPayload(){
