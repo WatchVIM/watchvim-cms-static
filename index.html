@@ -59,9 +59,9 @@
   <!-- Sidebar -->
   <aside class="border-r border-white/10 p-4 space-y-3">
     <div class="flex items-center gap-2 mb-4">
-      <!-- LOGO (put file in your public root or change URL) -->
+      <!-- LOGO -->
       <img
-        src="./WatchVIM_New_OTT_Logo.png"
+        src="/mnt/data/WatchVIM_New_OTT_Logo.png"
         alt="WatchVIM Logo"
         class="w-10 h-10 object-contain rounded-md bg-white/10 p-1"
       />
@@ -99,7 +99,8 @@
 
 <script>
 /* =========================================================
-   WATCHVIM CMS (single-file SPA) — v8
+   WATCHVIM CMS (single-file SPA) — v9
+   - Latest: IMDb + Credits (Director/Cast/Studio) restored
    - Tabs: Dashboard, Content, Users, Loop Channel, Advertising, Settings, Publish
    - Uploads disabled: paste Blob URLs + Mux IDs
    - Publish key sanitizer fixes "pathname cannot contain //"
@@ -126,8 +127,8 @@ window.addEventListener("unhandledrejection", (e)=> logDebug("Promise Rejection:
 ===================== */
 
 const LS_KEYS = {
-  CMS_STATE: "watchvim_cms_state_v8",
-  NAV_STACK: "watchvim_nav_stack_v8",
+  CMS_STATE: "watchvim_cms_state_v9",
+  NAV_STACK: "watchvim_nav_stack_v9",
 };
 
 function defaultState(){
@@ -319,12 +320,12 @@ function typeBadge(type){
 function getTitleById(id){ return cmsState.titles.find(t=>t.id===id); }
 function byType(type){ return cmsState.titles.filter(t=>t.type===type); }
 
-function splitGenres(str){
+function splitCSV(str){
   return (str||"").split(",").map(x=>x.trim()).filter(Boolean);
 }
-function tagify(arr){
-  return (arr||[]).join(", ");
-}
+function splitGenres(str){ return splitCSV(str); }
+function splitCast(str){ return splitCSV(str); }
+function tagify(arr){ return (arr||[]).join(", "); }
 
 function renderMuxPreview(playbackId){
   if(!playbackId) return `<div class="text-xs text-white/60">Enter a Mux Playback ID to preview.</div>`;
@@ -512,6 +513,7 @@ function renderContentHome(filter="all"){
               <div class="text-xs text-white/60 flex gap-1 flex-wrap items-center">
                 <span class="pill">${typeBadge(t.type)}</span>
                 ${isSeries ? `<span class="pill">${(t.seasons||[]).length} seasons</span>` : ``}
+                ${t.imdbRating ? `<span class="pill">IMDb ${t.imdbRating}</span>` : ``}
                 ${t.isPublished?`<span class="pill bg-green-600/20">Published</span>`:""}
               </div>
             </div>
@@ -542,6 +544,15 @@ function createTitle(presetType="films"){
     runtimeMins: "",
     language: "English",
     rating: "",
+
+    // ✅ Credits / metadata restored
+    director: "",
+    cast: [],           // comma-separated in UI
+    studio: "",
+    imdbRating: "",
+    imdbUrl: "",
+    contentAdvisory: "",
+
     posterUrl: "",
     heroUrl: "",
     titleLogoUrl: "",
@@ -579,6 +590,15 @@ function createSeries(){
     genre: [],
     releaseYear: "",
     language: "English",
+
+    // ✅ Credits / metadata restored
+    director: "",
+    cast: [],
+    studio: "",
+    imdbRating: "",
+    imdbUrl: "",
+    contentAdvisory: "",
+
     posterUrl: "",
     heroUrl: "",
     titleLogoUrl: "",
@@ -692,7 +712,41 @@ function renderTitleEdit(id){
           <div class="grid grid-cols-3 gap-3">
             <div><div class="label">Runtime (mins)</div><input id="runtimeMins" class="input" value="${t.runtimeMins||""}"/></div>
             <div><div class="label">Language</div><input id="language" class="input" value="${t.language||""}"/></div>
-            <div><div class="label">Rating</div><input id="rating" class="input" value="${t.rating||""}"/></div>
+            <div><div class="label">Rating (MPAA/TV)</div><input id="rating" class="input" value="${t.rating||""}"/></div>
+          </div>
+
+          <!-- ✅ Credits -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Director</div>
+              <input id="director" class="input" value="${t.director||""}" placeholder="Name(s)"/>
+            </div>
+            <div>
+              <div class="label">Studio / Distributor</div>
+              <input id="studio" class="input" value="${t.studio||""}" placeholder="Company"/>
+            </div>
+          </div>
+
+          <div>
+            <div class="label">Cast (comma separated)</div>
+            <input id="cast" class="input" value="${tagify(t.cast)}" placeholder="Actor 1, Actor 2, Actor 3"/>
+          </div>
+
+          <!-- ✅ IMDb + advisory -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">IMDb Rating (0–10)</div>
+              <input id="imdbRating" class="input" value="${t.imdbRating||""}" placeholder="7.4"/>
+            </div>
+            <div>
+              <div class="label">IMDb URL / Title ID</div>
+              <input id="imdbUrl" class="input" value="${t.imdbUrl||""}" placeholder="https://www.imdb.com/title/tt1234567/"/>
+            </div>
+          </div>
+
+          <div>
+            <div class="label">Content Advisory / Notes (optional)</div>
+            <input id="contentAdvisory" class="input" value="${t.contentAdvisory||""}" placeholder="violence, nudity, language..."/>
           </div>
 
           <div><div class="label">Genres (comma separated)</div><input id="genre" class="input" value="${tagify(t.genre)}"/></div>
@@ -814,6 +868,14 @@ function saveTitle(id){
   t.language = document.getElementById("language").value.trim();
   t.rating = document.getElementById("rating").value.trim();
 
+  // ✅ Credits + imdb
+  t.director = document.getElementById("director")?.value.trim() || "";
+  t.cast = splitCast(document.getElementById("cast")?.value || "");
+  t.studio = document.getElementById("studio")?.value.trim() || "";
+  t.imdbRating = document.getElementById("imdbRating")?.value.trim() || "";
+  t.imdbUrl = document.getElementById("imdbUrl")?.value.trim() || "";
+  t.contentAdvisory = document.getElementById("contentAdvisory")?.value.trim() || "";
+
   // URL fields
   t.posterUrl = document.getElementById("posterUrlInput")?.value.trim() || t.posterUrl;
   t.heroUrl = document.getElementById("heroUrlInput")?.value.trim() || t.heroUrl;
@@ -934,6 +996,38 @@ function renderSeriesEdit(seriesId){
             </div>
           </div>
 
+          <!-- ✅ Credits -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">Director</div>
+              <input id="seriesDirector" class="input" value="${s.director||""}" placeholder="Name(s)"/>
+            </div>
+            <div>
+              <div class="label">Studio / Distributor</div>
+              <input id="seriesStudio" class="input" value="${s.studio||""}" placeholder="Company"/>
+            </div>
+          </div>
+          <div>
+            <div class="label">Cast (comma separated)</div>
+            <input id="seriesCast" class="input" value="${tagify(s.cast)}" placeholder="Actor 1, Actor 2, Actor 3"/>
+          </div>
+
+          <!-- ✅ IMDb + advisory -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="label">IMDb Rating (0–10)</div>
+              <input id="seriesImdbRating" class="input" value="${s.imdbRating||""}" placeholder="7.4"/>
+            </div>
+            <div>
+              <div class="label">IMDb URL / Title ID</div>
+              <input id="seriesImdbUrl" class="input" value="${s.imdbUrl||""}" placeholder="https://www.imdb.com/title/tt1234567/"/>
+            </div>
+          </div>
+          <div>
+            <div class="label">Content Advisory / Notes (optional)</div>
+            <input id="seriesContentAdvisory" class="input" value="${s.contentAdvisory||""}" placeholder="violence, nudity, language..."/>
+          </div>
+
           <!-- Mux IDs -->
           <div class="grid grid-cols-2 gap-3">
             <div>
@@ -1005,11 +1099,20 @@ function renderSeriesEdit(seriesId){
 
 function saveSeries(seriesId){
   const s = getTitleById(seriesId);
+
   s.title = document.getElementById("seriesTitle").value.trim();
   s.synopsis = document.getElementById("seriesSynopsis").value.trim();
   s.genre = splitGenres(document.getElementById("seriesGenre").value);
   s.releaseYear = document.getElementById("seriesReleaseYear").value.trim();
   s.language = document.getElementById("seriesLanguage").value.trim();
+
+  // ✅ Credits + imdb
+  s.director = document.getElementById("seriesDirector")?.value.trim() || "";
+  s.cast = splitCast(document.getElementById("seriesCast")?.value || "");
+  s.studio = document.getElementById("seriesStudio")?.value.trim() || "";
+  s.imdbRating = document.getElementById("seriesImdbRating")?.value.trim() || "";
+  s.imdbUrl = document.getElementById("seriesImdbUrl")?.value.trim() || "";
+  s.contentAdvisory = document.getElementById("seriesContentAdvisory")?.value.trim() || "";
 
   s.posterUrl = document.getElementById("seriesPosterUrlInput")?.value.trim() || s.posterUrl;
   s.heroUrl = document.getElementById("seriesHeroUrlInput")?.value.trim() || s.heroUrl;
@@ -1635,16 +1738,13 @@ function renderAdvertising(){
       <div class="font-semibold">Global Ad Inventory</div>
       <div class="space-y-2">
         ${
-          (a.globalAds||[]).map(ad=>{
-            const skipText = ad.skippable
-              ? ('• skippable after ' + (ad.skipAfterSec||5) + 's')
-              : '• not skippable';
-            return `
+          (a.globalAds||[]).map(ad=>`
             <div class="card flex items-center justify-between">
               <div class="space-y-1">
                 <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
                 <div class="text-xs text-white/60">
-                  ${ad.durationSec||15}s ${skipText}
+                  ${ad.durationSec||15}s
+                  ${ad.skippable ? `• skippable after ${ad.skipAfterSec||5}s` : "• not skippable"}
                 </div>
                 ${ad.mediaUrl ? `<div class="text-xs break-all">${ad.mediaUrl}</div>` : ""}
                 ${ad.muxPlaybackId ? `<div class="text-xs break-all muted">mux:${ad.muxPlaybackId}</div>` : ""}
@@ -1652,8 +1752,7 @@ function renderAdvertising(){
               </div>
               <button class="btn" onclick="removeGlobalAd('${ad.id}')">Remove</button>
             </div>
-          `;
-          }).join("") || `<div class="text-white/60 text-sm">No global ads yet.</div>`
+          `).join("") || `<div class="text-white/60 text-sm">No global ads yet.</div>`
         }
       </div>
     </div>
@@ -1756,23 +1855,18 @@ function renderUsersTable(users){
   el.innerHTML = `
     <div class="text-xs text-white/60 mb-2">${users.length} users</div>
     <div class="space-y-2">
-      ${users.map(u=>{
-        const lastLogin = u.last_sign_in_at
-          ? ('• last login: ' + new Date(u.last_sign_in_at).toLocaleString())
-          : "";
-        return `
+      ${users.map(u=>`
         <div class="card flex items-center justify-between">
           <div>
             <div class="font-semibold text-sm">${u.email || "no-email"}</div>
             <div class="text-xs text-white/60">
               created: ${new Date(u.created_at).toLocaleString()}
-              ${lastLogin}
+              ${u.last_sign_in_at ? `• last login: ${new Date(u.last_sign_in_at).toLocaleString()}` : ""}
             </div>
           </div>
           <div class="text-xs pill">${u.role || "authenticated"}</div>
         </div>
-      `;
-      }).join("") || `<div class="text-white/60 text-sm">No users returned.</div>`}
+      `).join("") || `<div class="text-white/60 text-sm">No users returned.</div>`}
     </div>
   `;
 }
@@ -2126,9 +2220,9 @@ function renderPublish(){
 function sanitizePathKey(key){
   return (key||"")
     .trim()
-    .replace(/^\/+/, "")
-    .replace(/\/{2,}/g, "/")
-    .replace(/\s+/g, "-");
+    .replace(/^\/+/, "")      // no leading slash
+    .replace(/\/{2,}/g, "/") // collapse double slashes
+    .replace(/\s+/g, "-");   // spaces to dashes
 }
 
 function onlyPublishedPayload(){
