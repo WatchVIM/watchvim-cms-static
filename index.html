@@ -42,6 +42,7 @@
     .small { font-size:12px; }
     .danger { color:#ffb3b3; }
     a { color:#d4af37; }
+    code { background: rgba(255,255,255,.06); padding:2px 6px; border-radius:6px; }
 
     #debugPane {
       position: fixed; bottom: 10px; right: 10px; width: 360px; max-height: 40vh;
@@ -58,7 +59,7 @@
   <!-- Sidebar -->
   <aside class="border-r border-white/10 p-4 space-y-3">
     <div class="flex items-center gap-2 mb-4">
-      <!-- LOGO (replace src in production with /WatchVIM_New_OTT_Logo.png after adding to /public) -->
+      <!-- LOGO -->
       <img
         src="/mnt/data/WatchVIM_New_OTT_Logo.png"
         alt="WatchVIM Logo"
@@ -70,14 +71,19 @@
       </div>
     </div>
 
-    <!-- ONLY TABS: Dashboard + Content -->
-    <nav class="space-y-1">
-      <button class="w-full text-left btn" onclick="navTo('dashboard')">Dashboard</button>
-      <button class="w-full text-left btn" onclick="navTo('content')">Content</button>
+    <!-- TABS -->
+    <nav class="space-y-1 text-sm">
+      <button id="tab-dashboard" class="w-full text-left btn" onclick="navTo('dashboard')">Dashboard</button>
+      <button id="tab-content" class="w-full text-left btn" onclick="navTo('content')">Content</button>
+      <button id="tab-users" class="w-full text-left btn" onclick="navTo('users')">Users</button>
+      <button id="tab-loop" class="w-full text-left btn" onclick="navTo('loop')">Loop Channel</button>
+      <button id="tab-advertising" class="w-full text-left btn" onclick="navTo('advertising')">Advertising</button>
+      <button id="tab-settings" class="w-full text-left btn" onclick="navTo('settings')">Settings</button>
+      <button id="tab-publish" class="w-full text-left btn" onclick="navTo('publish')">Publish</button>
     </nav>
 
     <div class="pt-4 border-t border-white/10 text-xs text-white/60">
-      Local-first CMS. Save often. Publish when ready.
+      Blob URLs + Mux Asset IDs only (uploads disabled).
     </div>
 
     <div class="pt-2 text-xs">
@@ -93,7 +99,10 @@
 
 <script>
 /* =========================================================
-   WATCHVIM CMS (single-file SPA)
+   WATCHVIM CMS (single-file SPA) — v8
+   - Tabs: Dashboard, Content, Users, Loop Channel, Advertising, Settings, Publish
+   - Uploads disabled: paste Blob URLs + Mux IDs
+   - Publish key sanitizer fixes "pathname cannot contain //"
 ========================================================= */
 
 /* ========= DEBUG ========= */
@@ -117,33 +126,77 @@ window.addEventListener("unhandledrejection", (e)=> logDebug("Promise Rejection:
 ===================== */
 
 const LS_KEYS = {
-  CMS_STATE: "watchvim_cms_state_v7",
-  NAV_STACK: "watchvim_nav_stack_v7",
+  CMS_STATE: "watchvim_cms_state_v8",
+  NAV_STACK: "watchvim_nav_stack_v8",
 };
 
 function defaultState(){
   return {
-    titles: [],               // films/documentaries/shorts/foreign/series
+    titles: [],
+
     loopChannel: {
-      rotationItems: [],      // { id, refType:'title'|'episode', refId, label }
+      rotationItems: [],
       adFrequencyMins: 12,
       shuffle: true,
-      sponsoredAds: []        // { id, name, fileUrl, muxAdPlaybackId, durationSec }
+      sponsoredAds: [] // { id, name, mediaUrl, muxAdPlaybackId, durationSec, clickUrl }
     },
-    payment: {
-      paypalClientId: "",
-      paypalEnv: "sandbox"
+
+    advertising: {
+      enabled: true,
+      defaultAdFrequencyMins: 12,
+      globalAds: [
+        // { id, name, mediaUrl, muxPlaybackId, durationSec, clickUrl, skippable, skipAfterSec }
+      ],
+      vastTags: [
+        // { id, label, url, enabled }
+      ],
+      notes: ""
     },
-    publish: {
-      stableManifestKey: "manifest.json",
-      stableCatalogKey: "catalog.json"
+
+    settings: {
+      monetizationGlobal: {
+        allowSVOD: true,
+        allowAVOD: true,
+        allowTVOD: true,
+        currency: "USD",
+        defaultRentalWindowHours: 48
+      },
+      payment: {
+        paypalClientId: "",
+        paypalEnv: "sandbox",
+        stripePublishableKey: "",
+        appleIAPNotes: ""
+      },
+      seo: {
+        siteTitle: "WatchVIM",
+        siteDescription: "",
+        keywords: "",
+        ogImageUrl: "",
+        twitterHandle: "",
+        faviconUrl: ""
+      },
+      emails: {
+        fromName: "WatchVIM",
+        fromEmail: "",
+        welcomeSubject: "Welcome to WatchVIM",
+        welcomeBody: "Thanks for signing up!",
+        blastSubject: "",
+        blastBody: "",
+        providerNotes: ""
+      },
+      publishing: {
+        stableManifestKey: "manifest.json",
+        stableCatalogKey: "catalog.json"
+      }
     },
+
     analytics: {
       views7d: 0,
       minutesWatched7d: 0,
       newUsers7d: 0,
       revenue7d: 0
     },
+
     lastPublished: null,
     version: 1
   };
@@ -160,8 +213,13 @@ function loadState(){
     const parsed = JSON.parse(raw);
     const merged = { ...defaultState(), ...parsed };
     merged.loopChannel = { ...defaultState().loopChannel, ...(parsed.loopChannel||{}) };
-    merged.payment = { ...defaultState().payment, ...(parsed.payment||{}) };
-    merged.publish = { ...defaultState().publish, ...(parsed.publish||{}) };
+    merged.advertising = { ...defaultState().advertising, ...(parsed.advertising||{}) };
+    merged.settings = { ...defaultState().settings, ...(parsed.settings||{}) };
+    merged.settings.monetizationGlobal = { ...defaultState().settings.monetizationGlobal, ...(parsed.settings?.monetizationGlobal||{}) };
+    merged.settings.payment = { ...defaultState().settings.payment, ...(parsed.settings?.payment||{}) };
+    merged.settings.seo = { ...defaultState().settings.seo, ...(parsed.settings?.seo||{}) };
+    merged.settings.emails = { ...defaultState().settings.emails, ...(parsed.settings?.emails||{}) };
+    merged.settings.publishing = { ...defaultState().settings.publishing, ...(parsed.settings?.publishing||{}) };
     merged.analytics = { ...defaultState().analytics, ...(parsed.analytics||{}) };
     return merged;
   } catch {
@@ -203,6 +261,15 @@ function uid(prefix="id"){
    ROUTER
 ===================== */
 
+function setActiveTab(section){
+  const ids = ["dashboard","content","users","loop","advertising","settings","publish"];
+  ids.forEach(x=>{
+    const el = document.getElementById("tab-"+x);
+    if(!el) return;
+    el.style.background = (x===section) ? "rgba(255,255,255,.2)" : "rgba(255,255,255,.1)";
+  });
+}
+
 function navTo(route, opts={push:true}){
   if(opts.push) pushNav(route);
   render(route);
@@ -213,82 +280,24 @@ function render(route){
   if(!main) return;
 
   const [section, a, b, c] = route.split(":");
+  setActiveTab(section);
 
   if(section==="dashboard") return renderDashboard();
 
-  // NEW unified content hub
   if(section==="content") return renderContentHome(a);
 
-  // Back-compat (old routes remain if stored in navStack)
-  if(section==="titles") return renderTitlesList();
   if(section==="titleEdit") return renderTitleEdit(a);
-
-  if(section==="series") return renderSeriesList();
   if(section==="seriesEdit") return renderSeriesEdit(a);
   if(section==="seasonEdit") return renderSeasonEdit(a, Number(b));
   if(section==="episodeEdit") return renderEpisodeEdit(a, Number(b), Number(c));
 
-  if(section==="loop") return renderLoop();
   if(section==="users") return renderUsersPlaceholder();
-  if(section==="settings") return renderSettings();
+  if(section==="loop") return renderLoop();
+  if(section==="advertising") return renderAdvertising();
+  if(section==="settings") return renderSettings(a);
   if(section==="publish") return renderPublish();
 
   renderDashboard();
-}
-
-/* =====================
-   UPLOAD (server -> Vercel Blob)
-   FIXED: hardened response parsing & metadata
-===================== */
-
-async function uploadToBlob(file, keyPrefix="watchvim"){
-  try{
-    if(!file) return null;
-
-    const MAX = 4.2 * 1024 * 1024;
-    if(file.size > MAX){
-      alert("File is over 4MB. Please resize/compress before uploading.");
-      return null;
-    }
-
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    fd.append("filename", file.name);
-    fd.append("contentType", file.type || "application/octet-stream");
-    fd.append("keyPrefix", keyPrefix);
-    fd.append("cacheBust", Date.now().toString());
-
-    const res = await fetch("/api/upload", {
-      method:"POST",
-      body: fd,
-      credentials: "same-origin"
-    });
-
-    const txt = await res.text();
-    if(!res.ok){
-      throw new Error(txt || "Upload failed");
-    }
-
-    let data = {};
-    try { data = JSON.parse(txt); } catch { data = {}; }
-
-    const url =
-      data.url ||
-      data.blob?.url ||
-      data.data?.url ||
-      data.result?.url ||
-      data.upload?.url;
-
-    if(!url){
-      throw new Error("Upload succeeded but no URL returned from /api/upload.");
-    }
-
-    return { url, ...data };
-  }catch(e){
-    logDebug("uploadToBlob failed: " + e.message);
-    alert("Upload failed: " + e.message);
-    throw e;
-  }
 }
 
 /* =====================
@@ -329,7 +338,6 @@ function renderMuxPreview(playbackId){
   `;
 }
 
-/* ===== NEW: URL paste + preview helpers ===== */
 function setImageUrl(id, field, url, previewId){
   const t = getTitleById(id);
   if(!t) return;
@@ -340,7 +348,6 @@ function setImageUrl(id, field, url, previewId){
     if(img) img.src = t[field];
   }
 }
-
 function setSeasonImageUrl(seriesId, seasonIndex, field, url, previewId){
   const s = getTitleById(seriesId);
   if(!s?.seasons?.[seasonIndex]) return;
@@ -349,7 +356,6 @@ function setSeasonImageUrl(seriesId, seasonIndex, field, url, previewId){
   const img = document.getElementById(previewId);
   if(img) img.src = s.seasons[seasonIndex][field];
 }
-
 function setEpisodeImageUrl(seriesId, seasonIndex, epIndex, field, url, previewId){
   const s = getTitleById(seriesId);
   const ep = s?.seasons?.[seasonIndex]?.episodes?.[epIndex];
@@ -360,7 +366,6 @@ function setEpisodeImageUrl(seriesId, seasonIndex, epIndex, field, url, previewI
   if(img) img.src = ep[field];
 }
 
-/* ===== NEW: Refresh mux previews without full rerender ===== */
 function refreshTitleMuxPreviews(){
   const trailerPid = document.getElementById("trailerPlaybackId")?.value.trim();
   const contentPid = document.getElementById("contentPlaybackId")?.value.trim();
@@ -398,12 +403,15 @@ function renderDashboard(){
   const seriesCount = byType("series").length;
   const shortsCount = byType("shorts").length;
   const analytics = cmsState.analytics || defaultState().analytics;
+  const adsCount = (cmsState.advertising?.globalAds||[]).length;
+  const vastCount = (cmsState.advertising?.vastTags||[]).length;
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-bold">Dashboard</h1>
       <div class="flex gap-2">
         <button class="btn" onclick="navTo('content')">Manage Content</button>
+        <button class="btn" onclick="navTo('advertising')">Manage Ads</button>
         <button class="btn btn-red" onclick="navTo('publish')">Publish</button>
       </div>
     </div>
@@ -419,12 +427,12 @@ function renderDashboard(){
       <div class="card space-y-1">
         <div class="text-xs text-white/60">Views (7d)</div>
         <div class="text-2xl font-bold">${analytics.views7d}</div>
-        <div class="text-xs text-white/50">Connect Supabase/Mux later</div>
+        <div class="text-xs text-white/50">Connect Mux/Supabase later</div>
       </div>
       <div class="card space-y-1">
         <div class="text-xs text-white/60">Minutes Watched (7d)</div>
         <div class="text-2xl font-bold">${analytics.minutesWatched7d}</div>
-        <div class="text-xs text-white/50">Connect Supabase/Mux later</div>
+        <div class="text-xs text-white/50">Connect Mux later</div>
       </div>
       <div class="card space-y-1">
         <div class="text-xs text-white/60">New Users (7d)</div>
@@ -434,14 +442,20 @@ function renderDashboard(){
       <div class="card space-y-1">
         <div class="text-xs text-white/60">Revenue (7d)</div>
         <div class="text-2xl font-bold">$${Number(analytics.revenue7d||0).toFixed(2)}</div>
-        <div class="text-xs text-white/50">PayPal/Ads later</div>
+        <div class="text-xs text-white/50">Ads + Paywall later</div>
       </div>
     </div>
 
+    <div class="grid grid-cols-3 gap-3">
+      <div class="card">${h("Global Ads", adsCount)}</div>
+      <div class="card">${h("VAST Tags", vastCount)}</div>
+      <div class="card">${h("Loop Items", (cmsState.loopChannel?.rotationItems||[]).length)}</div>
+    </div>
+
     <div class="card small muted">
-      <div class="font-semibold mb-1">Publishing Pipeline (Stable)</div>
-      CMS → Publish → overwrites <code>${cmsState.publish.stableCatalogKey}</code> and <code>${cmsState.publish.stableManifestKey}</code> in Blob.
-      Your frontend should point to the stable Manifest URL once and never change it.
+      <div class="font-semibold mb-1">Blob + Mux workflow</div>
+      Upload artwork to Vercel Blob externally → paste URLs here.  
+      Upload video to Mux → paste Asset IDs (publish) and Playback IDs (preview).
     </div>
   `;
 }
@@ -514,40 +528,8 @@ function createContent(type){
 }
 
 /* =========================================================
-   TITLES LIST (non-series)  [legacy route]
+   CREATE TITLE / SERIES
 ========================================================= */
-
-function renderTitlesList(){
-  const main = document.getElementById("main");
-  const titles = cmsState.titles.filter(t=>t.type!=="series");
-
-  main.innerHTML = `
-    <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-bold">Movies / Docs / Shorts / Foreign</h1>
-      <div class="flex gap-2">
-        <button class="btn" onclick="goBack()">Back</button>
-        <button class="btn btn-red" onclick="createTitle()">+ New Title</button>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-5 gap-3">
-      ${
-        titles.map(t=>`
-          <div class="card cursor-pointer" onclick="navTo('titleEdit:${t.id}')">
-            <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
-              <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
-            </div>
-            <div class="mt-2 font-semibold line-clamp-2">${t.title||"Untitled"}</div>
-            <div class="text-xs text-white/60 flex gap-1 flex-wrap">
-              <span class="pill">${typeBadge(t.type)}</span>
-              ${t.isPublished?`<span class="pill bg-green-600/20">Published</span>`:""}
-            </div>
-          </div>
-        `).join("")
-      }
-    </div>
-  `;
-}
 
 function createTitle(presetType="films"){
   const t = {
@@ -562,15 +544,10 @@ function createTitle(presetType="films"){
     rating: "",
     posterUrl: "",
     heroUrl: "",
-
-    // NEW
     titleLogoUrl: "",
 
-    // NEW: Mux Asset IDs for publishing
     trailerAssetId: "",
     contentAssetId: "",
-
-    // Playback IDs for preview
     trailerPlaybackId: "",
     contentPlaybackId: "",
 
@@ -593,8 +570,41 @@ function createTitle(presetType="films"){
   navTo("titleEdit:"+t.id);
 }
 
+function createSeries(){
+  const s = {
+    id: uid("series"),
+    type: "series",
+    title: "",
+    synopsis: "",
+    genre: [],
+    releaseYear: "",
+    language: "English",
+    posterUrl: "",
+    heroUrl: "",
+    titleLogoUrl: "",
+
+    trailerAssetId: "",
+    contentAssetId: "",
+    trailerPlaybackId: "",
+    contentPlaybackId: "",
+
+    isPublished: false,
+    monetization: {
+      svod: true,
+      avod: false,
+      tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
+    },
+    appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" },
+    seasons: []
+  };
+
+  cmsState.titles.push(s);
+  saveState();
+  navTo("seriesEdit:"+s.id);
+}
+
 /* =========================================================
-   TITLE EDITOR
+   TITLE EDITOR (URL-only)
 ========================================================= */
 
 function renderTitleEdit(id){
@@ -619,19 +629,13 @@ function renderTitleEdit(id){
           <div class="aspect-[2/3] bg-white/5 rounded-xl overflow-hidden border border-white/10">
             <img id="posterPreview" src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
           </div>
-
-          <!-- Paste URL -->
           <input id="posterUrlInput"
             class="input small"
             placeholder="Paste Poster Blob URL..."
             value="${t.posterUrl||""}"
             oninput="setImageUrl('${id}','posterUrl',this.value,'posterPreview')"
           />
-          <div class="text-xs muted">Upload to Blob first, then paste here.</div>
-
-          <!-- Optional uploader -->
-          <input id="posterInput" type="file" accept="image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadPoster('${id}')">Upload Poster</button>
+          <div class="text-xs muted">Direct uploads disabled.</div>
         </div>
 
         <!-- Hero -->
@@ -640,19 +644,13 @@ function renderTitleEdit(id){
           <div class="aspect-video bg-white/5 rounded-xl overflow-hidden border border-white/10">
             <img id="heroPreview" src="${t.heroUrl||''}" class="w-full h-full object-cover"/>
           </div>
-
-          <!-- Paste URL -->
           <input id="heroUrlInput"
             class="input small"
             placeholder="Paste Hero Blob URL..."
             value="${t.heroUrl||""}"
             oninput="setImageUrl('${id}','heroUrl',this.value,'heroPreview')"
           />
-          <div class="text-xs muted">Upload to Blob first, then paste here.</div>
-
-          <!-- Optional uploader -->
-          <input id="heroInput" type="file" accept="image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadHero('${id}')">Upload Hero</button>
+          <div class="text-xs muted">Direct uploads disabled.</div>
         </div>
 
         <!-- Title Logo -->
@@ -661,17 +659,13 @@ function renderTitleEdit(id){
           <div class="aspect-[3/1] bg-white/5 rounded-xl overflow-hidden border border-white/10 flex items-center justify-center p-2">
             <img id="titleLogoPreview" src="${t.titleLogoUrl||''}" class="max-h-full max-w-full object-contain"/>
           </div>
-
           <input id="titleLogoUrlInput"
             class="input small"
             placeholder="Paste Title Logo PNG URL..."
             value="${t.titleLogoUrl||""}"
             oninput="setImageUrl('${id}','titleLogoUrl',this.value,'titleLogoPreview')"
           />
-          <div class="text-xs muted">Transparent PNG recommended.</div>
-
-          <input id="titleLogoInput" type="file" accept="image/png,image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadTitleLogo('${id}')">Upload Title Logo</button>
+          <div class="text-xs muted">Transparent PNG recommended. Direct uploads disabled.</div>
         </div>
       </div>
 
@@ -703,7 +697,7 @@ function renderTitleEdit(id){
 
           <div><div class="label">Genres (comma separated)</div><input id="genre" class="input" value="${tagify(t.genre)}"/></div>
 
-          <!-- Mux IDs: Asset IDs for publishing + Playback IDs for preview -->
+          <!-- Mux IDs -->
           <div class="grid grid-cols-2 gap-3">
             <div>
               <div class="label">Trailer Mux Asset ID (publishing)</div>
@@ -728,7 +722,6 @@ function renderTitleEdit(id){
             <button class="btn" onclick="refreshTitleMuxPreviews()">Refresh Mux Previews</button>
           </div>
 
-          <!-- Mux previews -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
             <div class="card space-y-2">
               <div class="text-xs text-white/60">Trailer Preview</div>
@@ -762,12 +755,12 @@ function renderTitleEdit(id){
         </div>
 
         <div class="card space-y-3">
-          <div class="font-semibold">Mobile + TV App Images</div>
+          <div class="font-semibold">Mobile + TV App Images (URL-only)</div>
           <div class="grid grid-cols-2 gap-3">
-            ${renderAppImageUpload(id,"mobileHeroUrl","Mobile Hero (9:16)","aspect-[9/16]","mobileHeroInput","mobileHeroPreview")}
-            ${renderAppImageUpload(id,"mobilePosterUrl","Mobile Poster (2:3)","aspect-[2/3]","mobilePosterInput","mobilePosterPreview")}
-            ${renderAppImageUpload(id,"tvHeroUrl","TV Hero (16:9)","aspect-video","tvHeroInput","tvHeroPreview")}
-            ${renderAppImageUpload(id,"tvPosterUrl","TV Poster (2:3)","aspect-[2/3]","tvPosterInput","tvPosterPreview")}
+            ${renderAppImageUrlField(id,"mobileHeroUrl","Mobile Hero (9:16)","aspect-[9/16]","mobileHeroPreview")}
+            ${renderAppImageUrlField(id,"mobilePosterUrl","Mobile Poster (2:3)","aspect-[2/3]","mobilePosterPreview")}
+            ${renderAppImageUrlField(id,"tvHeroUrl","TV Hero (16:9)","aspect-video","tvHeroPreview")}
+            ${renderAppImageUrlField(id,"tvPosterUrl","TV Poster (2:3)","aspect-[2/3]","tvPosterPreview")}
           </div>
         </div>
       </div>
@@ -775,78 +768,38 @@ function renderTitleEdit(id){
   `;
 }
 
-function renderAppImageUpload(id, field, label, aspect, inputId, previewId){
+function renderAppImageUrlField(id, field, label, aspect, previewId){
   const t = getTitleById(id);
+  const val = t.appImages?.[field] || "";
   return `
     <div class="space-y-2">
       <div class="label">${label}</div>
-      <img id="${previewId}" src="${t.appImages?.[field]||''}"
+      <img id="${previewId}" src="${val}"
            class="w-full ${aspect} object-cover rounded-xl border border-white/10 bg-white/5"/>
-      <input id="${inputId}" type="file" accept="image/*" class="input"/>
-      <button class="btn w-full" onclick="uploadAppImage('${id}','${field}','${inputId}','${previewId}')">Upload</button>
+      <input
+        class="input small"
+        placeholder="Paste Blob URL..."
+        value="${val}"
+        oninput="setAppImageUrl('${id}','${field}',this.value,'${previewId}')"
+      />
+      <div class="text-xs muted">Direct uploads disabled.</div>
     </div>
   `;
+}
+
+function setAppImageUrl(id, field, url, previewId){
+  const t = getTitleById(id);
+  if(!t) return;
+  t.appImages = t.appImages || {};
+  t.appImages[field] = (url||"").trim();
+  saveState();
+  const img = document.getElementById(previewId);
+  if(img) img.src = t.appImages[field];
 }
 
 function toggleTVODFields(){
   const enabled = document.getElementById("tvodEnabled")?.checked;
   document.getElementById("tvodFields")?.classList.toggle("hidden", !enabled);
-}
-
-async function uploadPoster(id){
-  try{
-    const f = document.getElementById("posterInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `titles/${id}/poster`);
-    const t = getTitleById(id);
-    t.posterUrl = out.url;
-    saveState();
-    document.getElementById("posterPreview").src = out.url;
-    const urlInput = document.getElementById("posterUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
-async function uploadHero(id){
-  try{
-    const f = document.getElementById("heroInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `titles/${id}/hero`);
-    const t = getTitleById(id);
-    t.heroUrl = out.url;
-    saveState();
-    document.getElementById("heroPreview").src = out.url;
-    const urlInput = document.getElementById("heroUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
-/* NEW: title logo upload */
-async function uploadTitleLogo(id){
-  try{
-    const f = document.getElementById("titleLogoInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `titles/${id}/title-logo`);
-    const t = getTitleById(id);
-    t.titleLogoUrl = out.url;
-    saveState();
-    document.getElementById("titleLogoPreview").src = out.url;
-    const urlInput = document.getElementById("titleLogoUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
-async function uploadAppImage(id, field, inputId, previewId){
-  try{
-    const f = document.getElementById(inputId).files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `titles/${id}/apps/${field}`);
-    const t = getTitleById(id);
-    t.appImages = t.appImages || {};
-    t.appImages[field] = out.url;
-    saveState();
-    document.getElementById(previewId).src = out.url;
-  }catch(e){}
 }
 
 function saveTitle(id){
@@ -861,7 +814,7 @@ function saveTitle(id){
   t.language = document.getElementById("language").value.trim();
   t.rating = document.getElementById("rating").value.trim();
 
-  // URL paste fields
+  // URL fields
   t.posterUrl = document.getElementById("posterUrlInput")?.value.trim() || t.posterUrl;
   t.heroUrl = document.getElementById("heroUrlInput")?.value.trim() || t.heroUrl;
   t.titleLogoUrl = document.getElementById("titleLogoUrlInput")?.value.trim() || t.titleLogoUrl;
@@ -894,75 +847,8 @@ function saveTitle(id){
 }
 
 /* =========================================================
-   SERIES / SEASONS / EPISODES
+   SERIES / SEASONS / EPISODES (URL-only)
 ========================================================= */
-
-function renderSeriesList(){
-  const main = document.getElementById("main");
-  const series = byType("series");
-
-  main.innerHTML = `
-    <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-bold">Series</h1>
-      <div class="flex gap-2">
-        <button class="btn" onclick="goBack()">Back</button>
-        <button class="btn btn-red" onclick="createSeries()">+ New Series</button>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-5 gap-3">
-      ${
-        series.map(s=>`
-          <div class="card cursor-pointer" onclick="navTo('seriesEdit:${s.id}')">
-            <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
-              <img src="${s.posterUrl||''}" class="w-full h-full object-cover"/>
-            </div>
-            <div class="mt-2 font-semibold line-clamp-2">${s.title||"Untitled Series"}</div>
-            <div class="text-xs text-white/60">${(s.seasons||[]).length} seasons</div>
-          </div>
-        `).join("")
-      }
-    </div>
-  `;
-}
-
-function createSeries(){
-  const s = {
-    id: uid("series"),
-    type: "series",
-    title: "",
-    synopsis: "",
-    genre: [],
-    releaseYear: "",
-    language: "English",
-    posterUrl: "",
-    heroUrl: "",
-
-    // NEW
-    titleLogoUrl: "",
-
-    // NEW: Mux Asset IDs for publishing
-    trailerAssetId: "",
-    contentAssetId: "",
-
-    // Playback IDs for preview
-    trailerPlaybackId: "",
-    contentPlaybackId: "",
-
-    isPublished: false,
-    monetization: {
-      svod: true,
-      avod: false,
-      tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
-    },
-    appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" },
-    seasons: []
-  };
-
-  cmsState.titles.push(s);
-  saveState();
-  navTo("seriesEdit:"+s.id);
-}
 
 function renderSeriesEdit(seriesId){
   const main = document.getElementById("main");
@@ -986,16 +872,13 @@ function renderSeriesEdit(seriesId){
           <div class="aspect-[2/3] bg-white/5 rounded-xl overflow-hidden border border-white/10">
             <img id="seriesPosterPreview" src="${s.posterUrl||''}" class="w-full h-full object-cover"/>
           </div>
-
           <input id="seriesPosterUrlInput"
             class="input small"
             placeholder="Paste Series Poster Blob URL..."
             value="${s.posterUrl||""}"
             oninput="setImageUrl('${seriesId}','posterUrl',this.value,'seriesPosterPreview')"
           />
-
-          <input id="seriesPosterInput" type="file" accept="image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadSeriesPoster('${seriesId}')">Upload Poster</button>
+          <div class="text-xs muted">Direct uploads disabled.</div>
         </div>
 
         <!-- Series Hero -->
@@ -1004,16 +887,13 @@ function renderSeriesEdit(seriesId){
           <div class="aspect-video bg-white/5 rounded-xl overflow-hidden border border-white/10">
             <img id="seriesHeroPreview" src="${s.heroUrl||''}" class="w-full h-full object-cover"/>
           </div>
-
           <input id="seriesHeroUrlInput"
             class="input small"
             placeholder="Paste Series Hero Blob URL..."
             value="${s.heroUrl||""}"
             oninput="setImageUrl('${seriesId}','heroUrl',this.value,'seriesHeroPreview')"
           />
-
-          <input id="seriesHeroInput" type="file" accept="image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadSeriesHero('${seriesId}')">Upload Hero</button>
+          <div class="text-xs muted">Direct uploads disabled.</div>
         </div>
 
         <!-- Series Title Logo -->
@@ -1022,16 +902,13 @@ function renderSeriesEdit(seriesId){
           <div class="aspect-[3/1] bg-white/5 rounded-xl overflow-hidden border border-white/10 flex items-center justify-center p-2">
             <img id="seriesTitleLogoPreview" src="${s.titleLogoUrl||''}" class="max-h-full max-w-full object-contain"/>
           </div>
-
           <input id="seriesTitleLogoUrlInput"
             class="input small"
             placeholder="Paste Series Title Logo PNG URL..."
             value="${s.titleLogoUrl||""}"
             oninput="setImageUrl('${seriesId}','titleLogoUrl',this.value,'seriesTitleLogoPreview')"
           />
-
-          <input id="seriesTitleLogoInput" type="file" accept="image/png,image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadSeriesTitleLogo('${seriesId}')">Upload Title Logo</button>
+          <div class="text-xs muted">Direct uploads disabled.</div>
         </div>
       </div>
 
@@ -1082,7 +959,6 @@ function renderSeriesEdit(seriesId){
             <button class="btn" onclick="refreshSeriesMuxPreviews()">Refresh Mux Previews</button>
           </div>
 
-          <!-- Mux previews -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
             <div class="card space-y-2">
               <div class="text-xs text-white/60">Trailer Preview</div>
@@ -1127,48 +1003,6 @@ function renderSeriesEdit(seriesId){
   `;
 }
 
-async function uploadSeriesPoster(seriesId){
-  try{
-    const f = document.getElementById("seriesPosterInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `series/${seriesId}/poster`);
-    const s = getTitleById(seriesId);
-    s.posterUrl = out.url;
-    saveState();
-    document.getElementById("seriesPosterPreview").src = out.url;
-    const urlInput = document.getElementById("seriesPosterUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-async function uploadSeriesHero(seriesId){
-  try{
-    const f = document.getElementById("seriesHeroInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `series/${seriesId}/hero`);
-    const s = getTitleById(seriesId);
-    s.heroUrl = out.url;
-    saveState();
-    document.getElementById("seriesHeroPreview").src = out.url;
-    const urlInput = document.getElementById("seriesHeroUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
-/* NEW: series title logo upload */
-async function uploadSeriesTitleLogo(seriesId){
-  try{
-    const f = document.getElementById("seriesTitleLogoInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `series/${seriesId}/title-logo`);
-    const s = getTitleById(seriesId);
-    s.titleLogoUrl = out.url;
-    saveState();
-    document.getElementById("seriesTitleLogoPreview").src = out.url;
-    const urlInput = document.getElementById("seriesTitleLogoUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
 function saveSeries(seriesId){
   const s = getTitleById(seriesId);
   s.title = document.getElementById("seriesTitle").value.trim();
@@ -1177,16 +1011,13 @@ function saveSeries(seriesId){
   s.releaseYear = document.getElementById("seriesReleaseYear").value.trim();
   s.language = document.getElementById("seriesLanguage").value.trim();
 
-  // URL paste fields
   s.posterUrl = document.getElementById("seriesPosterUrlInput")?.value.trim() || s.posterUrl;
   s.heroUrl = document.getElementById("seriesHeroUrlInput")?.value.trim() || s.heroUrl;
   s.titleLogoUrl = document.getElementById("seriesTitleLogoUrlInput")?.value.trim() || s.titleLogoUrl;
 
-  // Asset IDs for publishing
   s.trailerAssetId = document.getElementById("seriesTrailerAssetId")?.value.trim() || "";
   s.contentAssetId = document.getElementById("seriesContentAssetId")?.value.trim() || "";
 
-  // Playback IDs for preview
   s.trailerPlaybackId = document.getElementById("seriesTrailerPlaybackId").value.trim();
   s.contentPlaybackId = document.getElementById("seriesContentPlaybackId").value.trim();
 
@@ -1210,7 +1041,6 @@ function addSeason(seriesId){
   saveState();
   navTo(`seasonEdit:${seriesId}:${nextNum-1}`);
 }
-
 function removeSeason(seriesId, seasonIndex){
   const s = getTitleById(seriesId);
   s.seasons.splice(seasonIndex,1);
@@ -1249,33 +1079,26 @@ function renderSeasonEdit(seriesId, seasonIndex){
           <div class="label">Season Poster</div>
           <img id="seasonPosterPreview" src="${season.posterUrl||''}"
                class="w-full aspect-[2/3] object-cover rounded-xl border border-white/10 bg-white/5"/>
-
           <input id="seasonPosterUrlInput"
             class="input small"
             placeholder="Paste Season Poster Blob URL..."
             value="${season.posterUrl||""}"
             oninput="setSeasonImageUrl('${seriesId}',${seasonIndex},'posterUrl',this.value,'seasonPosterPreview')"
           />
-
-          <input id="seasonPosterInput" type="file" accept="image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadSeasonPoster('${seriesId}',${seasonIndex})">Upload Poster</button>
         </div>
         <div class="space-y-2">
           <div class="label">Season Hero</div>
           <img id="seasonHeroPreview" src="${season.heroUrl||''}"
                class="w-full aspect-video object-cover rounded-xl border border-white/10 bg-white/5"/>
-
           <input id="seasonHeroUrlInput"
             class="input small"
             placeholder="Paste Season Hero Blob URL..."
             value="${season.heroUrl||""}"
             oninput="setSeasonImageUrl('${seriesId}',${seasonIndex},'heroUrl',this.value,'seasonHeroPreview')"
           />
-
-          <input id="seasonHeroInput" type="file" accept="image/*" class="input"/>
-          <button class="btn w-full" onclick="uploadSeasonHero('${seriesId}',${seasonIndex})">Upload Hero</button>
         </div>
       </div>
+      <div class="text-xs muted">Direct uploads disabled.</div>
     </div>
 
     <div class="card space-y-2">
@@ -1307,38 +1130,13 @@ function renderSeasonEdit(seriesId, seasonIndex){
   `;
 }
 
-async function uploadSeasonPoster(seriesId, seasonIndex){
-  try{
-    const f = document.getElementById("seasonPosterInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/poster`);
-    const s = getTitleById(seriesId);
-    s.seasons[seasonIndex].posterUrl = out.url;
-    saveState();
-    document.getElementById("seasonPosterPreview").src = out.url;
-    const urlInput = document.getElementById("seasonPosterUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-async function uploadSeasonHero(seriesId, seasonIndex){
-  try{
-    const f = document.getElementById("seasonHeroInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/hero`);
-    const s = getTitleById(seriesId);
-    s.seasons[seasonIndex].heroUrl = out.url;
-    saveState();
-    document.getElementById("seasonHeroPreview").src = out.url;
-    const urlInput = document.getElementById("seasonHeroUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
 function saveSeason(seriesId, seasonIndex){
   const s = getTitleById(seriesId);
   const season = s.seasons[seasonIndex];
   season.title = document.getElementById("seasonTitle").value.trim();
   season.synopsis = document.getElementById("seasonSynopsis").value.trim();
+  season.posterUrl = document.getElementById("seasonPosterUrlInput")?.value.trim() || season.posterUrl;
+  season.heroUrl = document.getElementById("seasonHeroUrlInput")?.value.trim() || season.heroUrl;
   saveState();
   alert("Season saved.");
 }
@@ -1356,12 +1154,11 @@ function addEpisode(seriesId, seasonIndex){
     runtimeMins: "",
     thumbnailUrl: "",
 
-    // NEW: Mux Asset IDs for publishing
     trailerAssetId: "",
     contentAssetId: "",
-
     trailerPlaybackId: "",
     contentPlaybackId: "",
+
     isPublished: false,
     monetization: JSON.parse(JSON.stringify(s.monetization)),
     appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" }
@@ -1400,16 +1197,13 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
         <div class="aspect-[2/3] bg-white/5 rounded-xl overflow-hidden border border-white/10">
           <img id="epThumbPreview" src="${ep.thumbnailUrl||''}" class="w-full h-full object-cover"/>
         </div>
-
         <input id="epThumbUrlInput"
           class="input small"
           placeholder="Paste Episode Thumb Blob URL..."
           value="${ep.thumbnailUrl||""}"
           oninput="setEpisodeImageUrl('${seriesId}',${seasonIndex},${epIndex},'thumbnailUrl',this.value,'epThumbPreview')"
         />
-
-        <input id="epThumbInput" type="file" accept="image/*" class="input"/>
-        <button class="btn w-full" onclick="uploadEpisodeThumb('${seriesId}',${seasonIndex},${epIndex})">Upload Thumbnail</button>
+        <div class="text-xs muted">Direct uploads disabled.</div>
       </div>
 
       <div class="space-y-4">
@@ -1422,7 +1216,6 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
           <div><div class="label">Episode Title</div><input id="epTitle" class="input" value="${ep.title||""}"/></div>
           <div><div class="label">Synopsis</div><textarea id="epSynopsis" class="input" rows="3">${ep.synopsis||""}</textarea></div>
 
-          <!-- Mux IDs -->
           <div class="grid grid-cols-2 gap-3">
             <div>
               <div class="label">Trailer Asset ID (publishing)</div>
@@ -1441,7 +1234,6 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
             <button class="btn" onclick="refreshEpisodeMuxPreviews()">Refresh Mux Previews</button>
           </div>
 
-          <!-- Mux previews -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
             <div class="card space-y-2">
               <div class="text-xs text-white/60">Trailer Preview</div>
@@ -1462,20 +1254,6 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
   `;
 }
 
-async function uploadEpisodeThumb(seriesId, seasonIndex, epIndex){
-  try{
-    const f = document.getElementById("epThumbInput").files[0];
-    if(!f) return;
-    const out = await uploadToBlob(f, `series/${seriesId}/season-${seasonIndex+1}/episode-${epIndex+1}/thumb`);
-    const s = getTitleById(seriesId);
-    s.seasons[seasonIndex].episodes[epIndex].thumbnailUrl = out.url;
-    saveState();
-    document.getElementById("epThumbPreview").src = out.url;
-    const urlInput = document.getElementById("epThumbUrlInput");
-    if(urlInput) urlInput.value = out.url;
-  }catch(e){}
-}
-
 function saveEpisode(seriesId, seasonIndex, epIndex){
   const s = getTitleById(seriesId);
   const ep = s.seasons[seasonIndex].episodes[epIndex];
@@ -1484,18 +1262,12 @@ function saveEpisode(seriesId, seasonIndex, epIndex){
   ep.title = document.getElementById("epTitle").value.trim();
   ep.synopsis = document.getElementById("epSynopsis").value.trim();
   ep.runtimeMins = document.getElementById("epRuntime").value.trim();
-
-  // URL paste for thumb
   ep.thumbnailUrl = document.getElementById("epThumbUrlInput")?.value.trim() || ep.thumbnailUrl;
 
-  // Asset IDs for publishing
   ep.trailerAssetId = document.getElementById("epTrailerAssetId")?.value.trim() || "";
   ep.contentAssetId = document.getElementById("epContentAssetId")?.value.trim() || "";
-
-  // Playback IDs for preview
   ep.trailerPlaybackId = document.getElementById("epTrailer").value.trim();
   ep.contentPlaybackId = document.getElementById("epContent").value.trim();
-
   ep.isPublished = document.getElementById("epPublished").checked;
 
   s.seasons[seasonIndex].episodes.sort((a,b)=>a.episodeNumber-b.episodeNumber);
@@ -1506,11 +1278,9 @@ function saveEpisode(seriesId, seasonIndex, epIndex){
 }
 
 /* =========================================================
-   LOOP / USERS / SETTINGS / PUBLISH (UNCHANGED)
-   Keeping as-is for your stable frontend pipeline.
+   LOOP CHANNEL (URL-only ads)
 ========================================================= */
 
-/* ====== LOOP CHANNEL (same as your file) ====== */
 function flattenAllRefs(){
   const titles = cmsState.titles.filter(t => t.type !== "series");
   const series = cmsState.titles.filter(t => t.type === "series");
@@ -1587,24 +1357,25 @@ function saveLoopSettings(){
   alert("Loop settings saved.");
 }
 
-async function addSponsoredAd(){
+function addSponsoredAd(){
   const name = document.getElementById("adName").value.trim();
+  const mediaUrl = document.getElementById("adMediaUrl").value.trim();
   const muxAdPlaybackId = document.getElementById("adMuxId").value.trim();
   const durationSec = Number(document.getElementById("adDuration").value || 15);
-  const file = document.getElementById("adFile").files[0];
+  const clickUrl = document.getElementById("adClickUrl").value.trim();
 
-  let fileUrl = "";
-  if(file){
-    const out = await uploadToBlob(file, "loop/ads");
-    fileUrl = out.url;
+  if(!mediaUrl && !muxAdPlaybackId){
+    alert("Paste an Ad Media URL or a Mux Ad Playback ID.");
+    return;
   }
 
   cmsState.loopChannel.sponsoredAds.push({
     id: uid("ad"),
     name,
-    fileUrl,
+    mediaUrl,
     muxAdPlaybackId,
-    durationSec
+    durationSec,
+    clickUrl
   });
 
   saveState();
@@ -1697,13 +1468,14 @@ function renderLoop(){
     </div>
 
     <div class="card space-y-3">
-      <div class="font-semibold">Sponsored Ads (optional)</div>
+      <div class="font-semibold">Sponsored Ads (for Loop only)</div>
 
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-2">
         <input id="adName" class="input" placeholder="Ad name"/>
+        <input id="adMediaUrl" class="input" placeholder="Ad Media Blob URL (mp4/png/gif)"/>
         <input id="adMuxId" class="input" placeholder="Mux Ad Playback ID (optional)"/>
         <input id="adDuration" class="input" placeholder="Duration sec" value="15"/>
-        <input id="adFile" type="file" accept="video/*,image/*" class="input"/>
+        <input id="adClickUrl" class="input" placeholder="Click URL (optional)"/>
       </div>
       <button class="btn" onclick="addSponsoredAd()">+ Add Sponsored Ad</button>
 
@@ -1716,18 +1488,210 @@ function renderLoop(){
                 <div class="text-xs text-white/60">
                   ${ad.durationSec||15}s • ${ad.muxAdPlaybackId||"no mux id"}
                 </div>
-                ${ad.fileUrl ? `<div class="text-xs break-all">${ad.fileUrl}</div>` : ""}
+                ${ad.mediaUrl ? `<div class="text-xs break-all">${ad.mediaUrl}</div>` : ""}
+                ${ad.clickUrl ? `<div class="text-xs break-all muted">${ad.clickUrl}</div>` : ""}
               </div>
               <button class="btn" onclick="removeSponsoredAd('${ad.id}')">Remove</button>
             </div>
           `).join("") || `<div class="text-white/60 text-sm">No sponsored ads yet.</div>`
         }
       </div>
+      <div class="text-xs muted">These ads are separate from the AVOD ad stack in Advertising.</div>
     </div>
   `;
 }
 
-/* ====== USERS (same as your file) ====== */
+/* =========================================================
+   ADVERTISING (AVOD Global Ads + VAST Tags)
+========================================================= */
+
+function addGlobalAd(){
+  const a = cmsState.advertising;
+  const name = document.getElementById("gAdName").value.trim();
+  const mediaUrl = document.getElementById("gAdMediaUrl").value.trim();
+  const muxPlaybackId = document.getElementById("gAdMuxPid").value.trim();
+  const durationSec = Number(document.getElementById("gAdDuration").value || 15);
+  const clickUrl = document.getElementById("gAdClickUrl").value.trim();
+  const skippable = document.getElementById("gAdSkippable").checked;
+  const skipAfterSec = Number(document.getElementById("gAdSkipAfter").value || 5);
+
+  if(!mediaUrl && !muxPlaybackId){
+    alert("Paste Ad Media URL or Mux Playback ID.");
+    return;
+  }
+
+  a.globalAds.push({
+    id: uid("gAd"),
+    name,
+    mediaUrl,
+    muxPlaybackId,
+    durationSec,
+    clickUrl,
+    skippable,
+    skipAfterSec
+  });
+  saveState();
+  renderAdvertising();
+}
+
+function removeGlobalAd(id){
+  cmsState.advertising.globalAds =
+    cmsState.advertising.globalAds.filter(x=>x.id!==id);
+  saveState();
+  renderAdvertising();
+}
+
+function addVastTag(){
+  const label = document.getElementById("vastLabel").value.trim();
+  const url = document.getElementById("vastUrl").value.trim();
+  if(!url) return alert("Paste a VAST tag URL.");
+  cmsState.advertising.vastTags.push({
+    id: uid("vast"),
+    label,
+    url,
+    enabled: true
+  });
+  saveState();
+  renderAdvertising();
+}
+
+function toggleVastEnabled(id){
+  const v = cmsState.advertising.vastTags.find(x=>x.id===id);
+  if(!v) return;
+  v.enabled = !v.enabled;
+  saveState();
+  renderAdvertising();
+}
+
+function removeVastTag(id){
+  cmsState.advertising.vastTags =
+    cmsState.advertising.vastTags.filter(x=>x.id!==id);
+  saveState();
+  renderAdvertising();
+}
+
+function saveAdvertisingSettings(){
+  const a = cmsState.advertising;
+  a.enabled = document.getElementById("adsEnabled").checked;
+  a.defaultAdFrequencyMins = Number(document.getElementById("adsFreq").value || 12);
+  a.notes = document.getElementById("adsNotes").value.trim();
+  saveState();
+  alert("Advertising settings saved.");
+}
+
+function renderAdvertising(){
+  const main = document.getElementById("main");
+  const a = cmsState.advertising || defaultState().advertising;
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Advertising (AVOD)</h1>
+      <div class="flex gap-2">
+        <button class="btn" onclick="goBack()">Back</button>
+        <button class="btn btn-red" onclick="saveAdvertisingSettings()">Save Advertising</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="card space-y-3">
+        <div class="font-semibold">Global AVOD Ad Settings</div>
+
+        <label class="flex items-center gap-2 text-sm">
+          <input id="adsEnabled" type="checkbox" ${a.enabled?"checked":""}/>
+          Enable AVOD ads platform-wide
+        </label>
+
+        <div>
+          <div class="label">Default Ad Frequency (mins)</div>
+          <input id="adsFreq" class="input" value="${a.defaultAdFrequencyMins||12}" />
+          <div class="text-xs muted mt-1">Apps can override per-title if needed.</div>
+        </div>
+
+        <div>
+          <div class="label">Notes / Instructions for Apps</div>
+          <textarea id="adsNotes" class="input" rows="4" placeholder="e.g., use VAST first, fallback to globalAds...">${a.notes||""}</textarea>
+        </div>
+      </div>
+
+      <div class="card space-y-3">
+        <div class="font-semibold">Add Global Ad Creative</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <input id="gAdName" class="input" placeholder="Ad name / brand"/>
+          <input id="gAdDuration" class="input" placeholder="Duration sec" value="15"/>
+          <input id="gAdMediaUrl" class="input md:col-span-2" placeholder="Ad Media Blob URL (mp4/webm/png/gif)"/>
+          <input id="gAdMuxPid" class="input md:col-span-2" placeholder="Mux Ad Playback ID (optional)"/>
+          <input id="gAdClickUrl" class="input md:col-span-2" placeholder="Click-through URL (optional)"/>
+          <label class="flex items-center gap-2 text-sm">
+            <input id="gAdSkippable" type="checkbox"/>
+            Skippable
+          </label>
+          <input id="gAdSkipAfter" class="input" placeholder="Skip after (sec)" value="5"/>
+        </div>
+        <button class="btn w-full" onclick="addGlobalAd()">+ Add Global Ad</button>
+      </div>
+    </div>
+
+    <div class="card space-y-3">
+      <div class="font-semibold">Global Ad Inventory</div>
+      <div class="space-y-2">
+        ${
+          (a.globalAds||[]).map(ad=>`
+            <div class="card flex items-center justify-between">
+              <div class="space-y-1">
+                <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
+                <div class="text-xs text-white/60">
+                  ${ad.durationSec||15}s
+                  ${ad.skippable ? `• skippable after ${ad.skipAfterSec||5}s` : "• not skippable"}
+                </div>
+                ${ad.mediaUrl ? `<div class="text-xs break-all">${ad.mediaUrl}</div>` : ""}
+                ${ad.muxPlaybackId ? `<div class="text-xs break-all muted">mux:${ad.muxPlaybackId}</div>` : ""}
+                ${ad.clickUrl ? `<div class="text-xs break-all muted">${ad.clickUrl}</div>` : ""}
+              </div>
+              <button class="btn" onclick="removeGlobalAd('${ad.id}')">Remove</button>
+            </div>
+          `).join("") || `<div class="text-white/60 text-sm">No global ads yet.</div>`
+        }
+      </div>
+    </div>
+
+    <div class="card space-y-3">
+      <div class="font-semibold">VAST Tag Integration (priority stack)</div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <input id="vastLabel" class="input" placeholder="Network label (optional)"/>
+        <input id="vastUrl" class="input md:col-span-2" placeholder="Paste VAST tag URL"/>
+      </div>
+      <button class="btn" onclick="addVastTag()">+ Add VAST Tag</button>
+
+      <div class="space-y-2 pt-2">
+        ${
+          (a.vastTags||[]).map(v=>`
+            <div class="card flex items-center justify-between">
+              <div>
+                <div class="font-semibold">${v.label||"VAST Tag"}</div>
+                <div class="text-xs break-all ${v.enabled?'':'muted'}">${v.url}</div>
+                <div class="text-xs text-white/60">${v.enabled?"Enabled":"Disabled"}</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn" onclick="toggleVastEnabled('${v.id}')">${v.enabled?"Disable":"Enable"}</button>
+                <button class="btn" onclick="removeVastTag('${v.id}')">Remove</button>
+              </div>
+            </div>
+          `).join("") || `<div class="text-white/60 text-sm">No VAST tags yet.</div>`
+        }
+      </div>
+
+      <div class="text-xs muted">
+        Apps should attempt enabled VAST tags first, then fall back to Global Ads.
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================
+   USERS (Supabase Admin)
+========================================================= */
+
 const SUPA_LS = "watchvim_supabase_admin_cfg_v1";
 let supaAdminClient = null;
 
@@ -1840,78 +1804,283 @@ function renderUsersPlaceholder(){
   `;
 }
 
-/* ====== SETTINGS (same as your file) ====== */
-function renderSettings(){
+/* =========================================================
+   SETTINGS (drilldowns)
+========================================================= */
+
+function renderSettings(sub="monetization"){
   const main = document.getElementById("main");
-  const p = cmsState.payment || {};
-  const pub = cmsState.publish || {};
+  const s = cmsState.settings || defaultState().settings;
+
+  const pills = [
+    ["monetization","Monetization"],
+    ["payment","Payment Gateway"],
+    ["seo","Website SEO"],
+    ["emails","Email Notifications"],
+    ["publishing","Publishing"]
+  ];
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-bold">Settings</h1>
       <div class="flex gap-2">
         <button class="btn" onclick="goBack()">Back</button>
-        <button class="btn btn-red" onclick="saveSettings()">Save Settings</button>
+        <button class="btn btn-red" onclick="saveSettings('${sub}')">Save Settings</button>
       </div>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="row-scroll">
+      ${pills.map(([key,label])=>`
+        <button class="pill ${key===sub?'pill-active':''}" onclick="navTo('settings:${key}')">${label}</button>
+      `).join("")}
+    </div>
+
+    <div id="settingsBody"></div>
+  `;
+
+  const body = document.getElementById("settingsBody");
+  if(!body) return;
+
+  if(sub==="monetization"){
+    const m = s.monetizationGlobal;
+    body.innerHTML = `
       <div class="card space-y-3">
-        <div class="font-semibold">PayPal Gateway (Public)</div>
+        <div class="font-semibold">Global Monetization Rules</div>
 
-        <div>
-          <div class="label">PayPal Client ID (public)</div>
-          <input id="paypalClientId" class="input" value="${p.paypalClientId||""}"/>
+        <label class="flex items-center gap-2 text-sm">
+          <input id="allowSVOD" type="checkbox" ${m.allowSVOD?"checked":""}/>
+          Allow SVOD titles
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input id="allowAVOD" type="checkbox" ${m.allowAVOD?"checked":""}/>
+          Allow AVOD titles
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input id="allowTVOD" type="checkbox" ${m.allowTVOD?"checked":""}/>
+          Allow TVOD titles
+        </label>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <div class="label">Currency</div>
+            <input id="currency" class="input" value="${m.currency||"USD"}"/>
+          </div>
+          <div>
+            <div class="label">Default Rental Window (hrs)</div>
+            <input id="defaultRentalWindowHours" class="input" value="${m.defaultRentalWindowHours||48}"/>
+          </div>
         </div>
 
-        <div>
-          <div class="label">Environment</div>
-          <select id="paypalEnv" class="input">
-            <option value="sandbox" ${p.paypalEnv==="sandbox"?"selected":""}>Sandbox</option>
-            <option value="live" ${p.paypalEnv==="live"?"selected":""}>Live</option>
-          </select>
-        </div>
-
-        <div class="text-xs text-white/60">
-          Never store PayPal Secret in the CMS. Keep secrets in backend env only.
+        <div class="text-xs muted">
+          These are platform defaults; per-title monetization still lives in Content.
         </div>
       </div>
+    `;
+  }
 
+  if(sub==="payment"){
+    const p = s.payment;
+    body.innerHTML = `
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="card space-y-3">
+          <div class="font-semibold">PayPal (Public)</div>
+          <div>
+            <div class="label">PayPal Client ID</div>
+            <input id="paypalClientId" class="input" value="${p.paypalClientId||""}"/>
+          </div>
+          <div>
+            <div class="label">Environment</div>
+            <select id="paypalEnv" class="input">
+              <option value="sandbox" ${p.paypalEnv==="sandbox"?"selected":""}>Sandbox</option>
+              <option value="live" ${p.paypalEnv==="live"?"selected":""}>Live</option>
+            </select>
+          </div>
+          <div class="text-xs muted">Do not store secrets here.</div>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Stripe (Publishable)</div>
+          <div>
+            <div class="label">Stripe Publishable Key</div>
+            <input id="stripePublishableKey" class="input" value="${p.stripePublishableKey||""}"/>
+          </div>
+          <div>
+            <div class="label">Apple/Google IAP Notes</div>
+            <textarea id="appleIAPNotes" class="input" rows="4">${p.appleIAPNotes||""}</textarea>
+          </div>
+          <div class="text-xs muted">Use backend for webhooks + secret keys.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  if(sub==="seo"){
+    const seo = s.seo;
+    body.innerHTML = `
+      <div class="card space-y-3">
+        <div class="font-semibold">Website SEO / Social</div>
+
+        <div>
+          <div class="label">Site Title</div>
+          <input id="siteTitle" class="input" value="${seo.siteTitle||""}"/>
+        </div>
+        <div>
+          <div class="label">Site Description</div>
+          <textarea id="siteDescription" class="input" rows="3">${seo.siteDescription||""}</textarea>
+        </div>
+        <div>
+          <div class="label">Keywords (comma separated)</div>
+          <input id="keywords" class="input" value="${seo.keywords||""}"/>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <div class="label">OG Image URL (Blob)</div>
+            <input id="ogImageUrl" class="input" value="${seo.ogImageUrl||""}"/>
+          </div>
+          <div>
+            <div class="label">Favicon URL (Blob)</div>
+            <input id="faviconUrl" class="input" value="${seo.faviconUrl||""}"/>
+          </div>
+        </div>
+
+        <div>
+          <div class="label">Twitter / X Handle</div>
+          <input id="twitterHandle" class="input" value="${seo.twitterHandle||""}"/>
+        </div>
+
+        <div class="text-xs muted">
+          Apps/web can read this from the published catalog for meta tags.
+        </div>
+      </div>
+    `;
+  }
+
+  if(sub==="emails"){
+    const e = s.emails;
+    body.innerHTML = `
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="card space-y-3">
+          <div class="font-semibold">Sender Defaults</div>
+          <div>
+            <div class="label">From Name</div>
+            <input id="fromName" class="input" value="${e.fromName||""}"/>
+          </div>
+          <div>
+            <div class="label">From Email</div>
+            <input id="fromEmail" class="input" value="${e.fromEmail||""}"/>
+          </div>
+
+          <div>
+            <div class="label">Provider / SMTP Notes</div>
+            <textarea id="providerNotes" class="input" rows="4">${e.providerNotes||""}</textarea>
+          </div>
+        </div>
+
+        <div class="card space-y-3">
+          <div class="font-semibold">Welcome Email (New Users)</div>
+          <div>
+            <div class="label">Subject</div>
+            <input id="welcomeSubject" class="input" value="${e.welcomeSubject||""}"/>
+          </div>
+          <div>
+            <div class="label">Body</div>
+            <textarea id="welcomeBody" class="input" rows="6">${e.welcomeBody||""}</textarea>
+          </div>
+        </div>
+
+        <div class="card space-y-3 lg:col-span-2">
+          <div class="font-semibold">Email Blast (All Registered Users)</div>
+          <div>
+            <div class="label">Blast Subject</div>
+            <input id="blastSubject" class="input" value="${e.blastSubject||""}"/>
+          </div>
+          <div>
+            <div class="label">Blast Body</div>
+            <textarea id="blastBody" class="input" rows="6">${e.blastBody||""}</textarea>
+          </div>
+          <div class="text-xs muted">
+            This CMS stores templates only. Sending is handled by your backend.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if(sub==="publishing"){
+    const pub = s.publishing;
+    body.innerHTML = `
       <div class="card space-y-3">
         <div class="font-semibold">Publishing (Stable URLs)</div>
-
         <div>
           <div class="label">Stable Manifest Key</div>
           <input id="stableManifestKey" class="input" value="${pub.stableManifestKey||"manifest.json"}"/>
-          <div class="text-xs text-white/60 mt-1">Frontend should point here once.</div>
+          <div class="text-xs muted mt-1">Do NOT start with "/" and no double slashes.</div>
         </div>
-
         <div>
           <div class="label">Stable Catalog Key</div>
           <input id="stableCatalogKey" class="input" value="${pub.stableCatalogKey||"catalog.json"}"/>
         </div>
       </div>
-    </div>
-  `;
+    `;
+  }
 }
 
-function saveSettings(){
-  cmsState.payment = cmsState.payment || {};
-  cmsState.publish = cmsState.publish || {};
+function saveSettings(sub){
+  const s = cmsState.settings;
 
-  cmsState.payment.paypalClientId = document.getElementById("paypalClientId").value.trim();
-  cmsState.payment.paypalEnv = document.getElementById("paypalEnv").value;
-  cmsState.publish.stableManifestKey = document.getElementById("stableManifestKey").value.trim() || "manifest.json";
-  cmsState.publish.stableCatalogKey = document.getElementById("stableCatalogKey").value.trim() || "catalog.json";
+  if(sub==="monetization"){
+    s.monetizationGlobal.allowSVOD = document.getElementById("allowSVOD").checked;
+    s.monetizationGlobal.allowAVOD = document.getElementById("allowAVOD").checked;
+    s.monetizationGlobal.allowTVOD = document.getElementById("allowTVOD").checked;
+    s.monetizationGlobal.currency = document.getElementById("currency").value.trim() || "USD";
+    s.monetizationGlobal.defaultRentalWindowHours =
+      Number(document.getElementById("defaultRentalWindowHours").value || 48);
+  }
+
+  if(sub==="payment"){
+    s.payment.paypalClientId = document.getElementById("paypalClientId").value.trim();
+    s.payment.paypalEnv = document.getElementById("paypalEnv").value;
+    s.payment.stripePublishableKey = document.getElementById("stripePublishableKey").value.trim();
+    s.payment.appleIAPNotes = document.getElementById("appleIAPNotes").value.trim();
+  }
+
+  if(sub==="seo"){
+    s.seo.siteTitle = document.getElementById("siteTitle").value.trim();
+    s.seo.siteDescription = document.getElementById("siteDescription").value.trim();
+    s.seo.keywords = document.getElementById("keywords").value.trim();
+    s.seo.ogImageUrl = document.getElementById("ogImageUrl").value.trim();
+    s.seo.faviconUrl = document.getElementById("faviconUrl").value.trim();
+    s.seo.twitterHandle = document.getElementById("twitterHandle").value.trim();
+  }
+
+  if(sub==="emails"){
+    s.emails.fromName = document.getElementById("fromName").value.trim();
+    s.emails.fromEmail = document.getElementById("fromEmail").value.trim();
+    s.emails.providerNotes = document.getElementById("providerNotes").value.trim();
+    s.emails.welcomeSubject = document.getElementById("welcomeSubject").value.trim();
+    s.emails.welcomeBody = document.getElementById("welcomeBody").value.trim();
+    s.emails.blastSubject = document.getElementById("blastSubject").value.trim();
+    s.emails.blastBody = document.getElementById("blastBody").value.trim();
+  }
+
+  if(sub==="publishing"){
+    s.publishing.stableManifestKey = document.getElementById("stableManifestKey").value.trim() || "manifest.json";
+    s.publishing.stableCatalogKey = document.getElementById("stableCatalogKey").value.trim() || "catalog.json";
+  }
+
   saveState();
   alert("Settings saved.");
 }
 
-/* ====== PUBLISH (same as your file) ====== */
+/* =========================================================
+   PUBLISH (sanitizes pathname to avoid //)
+========================================================= */
+
 function renderPublish(){
   const main = document.getElementById("main");
   const last = cmsState.lastPublished;
-  const stableManifestKey = cmsState.publish.stableManifestKey || "manifest.json";
+  const stableManifestKey = cmsState.settings?.publishing?.stableManifestKey || "manifest.json";
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1924,7 +2093,7 @@ function renderPublish(){
         <div class="font-semibold">Publish Catalog (Stable)</div>
         <div class="text-sm text-white/70">
           Publishes ONLY items with “Published” checked.
-          Overwrites stable <code>${cmsState.publish.stableCatalogKey}</code> and <code>${stableManifestKey}</code>.
+          Overwrites stable <code>${cmsState.settings.publishing.stableCatalogKey}</code> and <code>${stableManifestKey}</code>.
         </div>
 
         <button class="btn btn-red w-full" onclick="publishCatalog()">Publish to Apps</button>
@@ -1945,6 +2114,14 @@ function renderPublish(){
   `;
 }
 
+function sanitizePathKey(key){
+  return (key||"")
+    .trim()
+    .replace(/^\/+/, "")      // no leading slash
+    .replace(/\/{2,}/g, "/") // collapse double slashes
+    .replace(/\s+/g, "-");   // spaces to dashes
+}
+
 function onlyPublishedPayload(){
   const titles = cmsState.titles
     .filter(t => t.isPublished)
@@ -1959,17 +2136,27 @@ function onlyPublishedPayload(){
       return clone;
     });
 
+  const stableManifestKey = sanitizePathKey(cmsState.settings.publishing.stableManifestKey || "manifest.json");
+  const stableCatalogKey = sanitizePathKey(cmsState.settings.publishing.stableCatalogKey || "catalog.json");
+
   return {
     version: (cmsState.version||1) + 1,
     publishedAt: new Date().toISOString(),
     titles,
     loopChannel: cmsState.loopChannel,
-    paymentPublic: {
-      paypalClientId: cmsState.payment.paypalClientId,
-      paypalEnv: cmsState.payment.paypalEnv
+    advertising: cmsState.advertising,
+    settingsPublic: {
+      monetizationGlobal: cmsState.settings.monetizationGlobal,
+      paymentPublic: {
+        paypalClientId: cmsState.settings.payment.paypalClientId,
+        paypalEnv: cmsState.settings.payment.paypalEnv,
+        stripePublishableKey: cmsState.settings.payment.stripePublishableKey
+      },
+      seo: cmsState.settings.seo,
+      emails: cmsState.settings.emails
     },
-    stableManifestKey: cmsState.publish.stableManifestKey || "manifest.json",
-    stableCatalogKey: cmsState.publish.stableCatalogKey || "catalog.json"
+    stableManifestKey,
+    stableCatalogKey
   };
 }
 
@@ -2010,7 +2197,7 @@ async function publishCatalog(){
 /* =====================
    INIT
 ===================== */
-navTo("dashboard", {push:false});
+navTo(navStack[navStack.length-1] || "dashboard", {push:false});
 </script>
 </body>
 </html>
