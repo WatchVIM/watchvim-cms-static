@@ -21,11 +21,15 @@
     }
   </script>
 
+  <!-- Mux Player (for previews) -->
+  <script src="https://unpkg.com/@mux/mux-player@latest/dist/mux-player.js"></script>
+
   <style>
     body { background:#0a0a0a; color:#fff; font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .input { background:#111; border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:8px 10px; width:100%; }
     .label { font-size:12px; color:rgba(255,255,255,.7); }
     .pill { font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(255,255,255,.08); }
+    .pill-active { background:rgba(255,255,255,.2); }
     .btn { padding:8px 12px; border-radius:10px; background:rgba(255,255,255,.1); }
     .btn:hover { background:rgba(255,255,255,.16); }
     .btn-red { background:#e50914; font-weight:700; }
@@ -66,14 +70,10 @@
       </div>
     </div>
 
+    <!-- ONLY TABS: Dashboard + Content -->
     <nav class="space-y-1">
       <button class="w-full text-left btn" onclick="navTo('dashboard')">Dashboard</button>
-      <button class="w-full text-left btn" onclick="navTo('titles')">Movies / Docs / Shorts / Foreign</button>
-      <button class="w-full text-left btn" onclick="navTo('series')">Series / Seasons / Episodes</button>
-      <button class="w-full text-left btn" onclick="navTo('loop')">Loop Channel</button>
-      <button class="w-full text-left btn" onclick="navTo('users')">Users (Supabase)</button>
-      <button class="w-full text-left btn" onclick="navTo('settings')">Settings</button>
-      <button class="w-full text-left btn btn-red" onclick="navTo('publish')">Publish</button>
+      <button class="w-full text-left btn" onclick="navTo('content')">Content</button>
     </nav>
 
     <div class="pt-4 border-t border-white/10 text-xs text-white/60">
@@ -159,7 +159,6 @@ function loadState(){
   try {
     const parsed = JSON.parse(raw);
     const merged = { ...defaultState(), ...parsed };
-    // Ensure nested defaults exist even if older LS version
     merged.loopChannel = { ...defaultState().loopChannel, ...(parsed.loopChannel||{}) };
     merged.payment = { ...defaultState().payment, ...(parsed.payment||{}) };
     merged.publish = { ...defaultState().publish, ...(parsed.publish||{}) };
@@ -216,6 +215,11 @@ function render(route){
   const [section, a, b, c] = route.split(":");
 
   if(section==="dashboard") return renderDashboard();
+
+  // NEW unified content hub
+  if(section==="content") return renderContentHome(a);
+
+  // Back-compat (old routes remain if stored in navStack)
   if(section==="titles") return renderTitlesList();
   if(section==="titleEdit") return renderTitleEdit(a);
 
@@ -234,25 +238,52 @@ function render(route){
 
 /* =====================
    UPLOAD (server -> Vercel Blob)
+   FIXED: hardened response parsing & metadata
 ===================== */
 
 async function uploadToBlob(file, keyPrefix="watchvim"){
   try{
     if(!file) return null;
-    if(file.size > 4.2 * 1024 * 1024){
+
+    const MAX = 4.2 * 1024 * 1024;
+    if(file.size > MAX){
       alert("File is over 4MB. Please resize/compress before uploading.");
       return null;
     }
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("keyPrefix", keyPrefix);
 
-    const res = await fetch("/api/upload", { method:"POST", body: fd });
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("filename", file.name);
+    fd.append("contentType", file.type || "application/octet-stream");
+    fd.append("keyPrefix", keyPrefix);
+    fd.append("cacheBust", Date.now().toString());
+
+    const res = await fetch("/api/upload", {
+      method:"POST",
+      body: fd,
+      credentials: "same-origin"
+    });
+
+    const txt = await res.text();
     if(!res.ok){
-      const txt = await res.text();
-      throw new Error(txt||"Upload failed");
+      throw new Error(txt || "Upload failed");
     }
-    return await res.json(); // { url }
+
+    let data = {};
+    try { data = JSON.parse(txt); } catch { data = {}; }
+
+    const url =
+      data.url ||
+      data.blob?.url ||
+      data.data?.url ||
+      data.result?.url ||
+      data.upload?.url;
+
+    if(!url){
+      throw new Error("Upload succeeded but no URL returned from /api/upload.");
+    }
+
+    return { url, ...data };
   }catch(e){
     logDebug("uploadToBlob failed: " + e.message);
     alert("Upload failed: " + e.message);
@@ -268,8 +299,11 @@ const h = (label, value) => `<div class="pill">${label}: <b>${value}</b></div>`;
 
 function typeBadge(type){
   const map = {
-    films:"Movies", documentaries:"Movies",
-    series:"Series", shorts:"Shorts", foreign:"Foreign"
+    films:"Films",
+    documentaries:"Documentaries",
+    series:"Series",
+    shorts:"Shorts",
+    foreign:"Foreign"
   };
   return map[type] || type || "Uncategorized";
 }
@@ -281,6 +315,18 @@ function splitGenres(str){
 }
 function tagify(arr){
   return (arr||[]).join(", ");
+}
+
+function renderMuxPreview(playbackId){
+  if(!playbackId) return `<div class="text-xs text-white/60">Enter a Mux Playback ID to preview.</div>`;
+  return `
+    <mux-player
+      class="w-full rounded-xl overflow-hidden border border-white/10 bg-black/50 aspect-video"
+      playback-id="${playbackId}"
+      stream-type="on-demand"
+      controls
+    ></mux-player>
+  `;
 }
 
 /* =========================================================
@@ -300,7 +346,7 @@ function renderDashboard(){
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-bold">Dashboard</h1>
       <div class="flex gap-2">
-        <button class="btn" onclick="navTo('titles')">Manage Titles</button>
+        <button class="btn" onclick="navTo('content')">Manage Content</button>
         <button class="btn btn-red" onclick="navTo('publish')">Publish</button>
       </div>
     </div>
@@ -344,7 +390,74 @@ function renderDashboard(){
 }
 
 /* =========================================================
-   TITLES LIST (non-series)
+   CONTENT HUB (ALL TYPES)
+========================================================= */
+
+function renderContentHome(filter="all"){
+  const main = document.getElementById("main");
+  const current = filter || "all";
+
+  const filters = [
+    { key:"all", label:"All" },
+    { key:"films", label:"Films" },
+    { key:"series", label:"Series" },
+    { key:"documentaries", label:"Documentaries" },
+    { key:"shorts", label:"Shorts" },
+    { key:"foreign", label:"Foreign" },
+  ];
+
+  const items = current==="all" ? cmsState.titles : byType(current);
+
+  main.innerHTML = `
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Content</h1>
+      <div class="flex gap-2">
+        <button class="btn btn-red" onclick="createContent('${current}')">
+          + New ${current==="series" ? "Series" : "Title"}
+        </button>
+        <button class="btn" onclick="navTo('publish')">Publish</button>
+      </div>
+    </div>
+
+    <div class="row-scroll">
+      ${filters.map(f => `
+        <button
+          class="pill ${f.key===current ? "pill-active" : ""}"
+          onclick="navTo('content:${f.key}')"
+        >${f.label}</button>
+      `).join("")}
+    </div>
+
+    <div class="grid grid-cols-5 gap-3">
+      ${
+        items.map(t => {
+          const isSeries = t.type==="series";
+          return `
+            <div class="card cursor-pointer" onclick="navTo('${isSeries ? "seriesEdit" : "titleEdit"}:${t.id}')">
+              <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
+                <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
+              </div>
+              <div class="mt-2 font-semibold line-clamp-2">${t.title|| (isSeries ? "Untitled Series" : "Untitled")}</div>
+              <div class="text-xs text-white/60 flex gap-1 flex-wrap items-center">
+                <span class="pill">${typeBadge(t.type)}</span>
+                ${isSeries ? `<span class="pill">${(t.seasons||[]).length} seasons</span>` : ``}
+                ${t.isPublished?`<span class="pill bg-green-600/20">Published</span>`:""}
+              </div>
+            </div>
+          `;
+        }).join("") || `<div class="text-white/60 text-sm">No content yet.</div>`
+      }
+    </div>
+  `;
+}
+
+function createContent(type){
+  if(type==="series") return createSeries();
+  return createTitle(type==="all" ? "films" : type);
+}
+
+/* =========================================================
+   TITLES LIST (non-series)  [legacy route]
 ========================================================= */
 
 function renderTitlesList(){
@@ -379,10 +492,10 @@ function renderTitlesList(){
   `;
 }
 
-function createTitle(){
+function createTitle(presetType="films"){
   const t = {
     id: uid("title"),
-    type: "films",
+    type: presetType,
     title: "",
     synopsis: "",
     genre: [],
@@ -420,7 +533,7 @@ function createTitle(){
 function renderTitleEdit(id){
   const main = document.getElementById("main");
   const t = getTitleById(id);
-  if(!t) return navTo("titles");
+  if(!t) return navTo("content");
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -483,6 +596,18 @@ function renderTitleEdit(id){
           <div class="grid grid-cols-2 gap-3">
             <div><div class="label">Trailer Mux Playback ID</div><input id="trailerPlaybackId" class="input" value="${t.trailerPlaybackId||""}"/></div>
             <div><div class="label">Content Mux Playback ID</div><input id="contentPlaybackId" class="input" value="${t.contentPlaybackId||""}"/></div>
+          </div>
+
+          <!-- Mux previews -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+            <div class="card space-y-2">
+              <div class="text-xs text-white/60">Trailer Preview</div>
+              ${renderMuxPreview(t.trailerPlaybackId)}
+            </div>
+            <div class="card space-y-2">
+              <div class="text-xs text-white/60">Content Preview</div>
+              ${renderMuxPreview(t.contentPlaybackId)}
+            </div>
           </div>
 
           <div class="flex items-center gap-2">
@@ -672,7 +797,7 @@ function createSeries(){
 function renderSeriesEdit(seriesId){
   const main = document.getElementById("main");
   const s = getTitleById(seriesId);
-  if(!s) return navTo("series");
+  if(!s) return navTo("content:series");
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -734,6 +859,18 @@ function renderSeriesEdit(seriesId){
             <div>
               <div class="label">Series Content Playback ID (optional)</div>
               <input id="seriesContentPlaybackId" class="input" value="${s.contentPlaybackId||""}"/>
+            </div>
+          </div>
+
+          <!-- Mux previews -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+            <div class="card space-y-2">
+              <div class="text-xs text-white/60">Trailer Preview</div>
+              ${renderMuxPreview(s.trailerPlaybackId)}
+            </div>
+            <div class="card space-y-2">
+              <div class="text-xs text-white/60">Content Preview</div>
+              ${renderMuxPreview(s.contentPlaybackId)}
             </div>
           </div>
 
@@ -1006,6 +1143,18 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
             <div><div class="label">Content Playback ID</div><input id="epContent" class="input" value="${ep.contentPlaybackId||""}"/></div>
           </div>
 
+          <!-- Mux previews -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+            <div class="card space-y-2">
+              <div class="text-xs text-white/60">Trailer Preview</div>
+              ${renderMuxPreview(ep.trailerPlaybackId)}
+            </div>
+            <div class="card space-y-2">
+              <div class="text-xs text-white/60">Content Preview</div>
+              ${renderMuxPreview(ep.contentPlaybackId)}
+            </div>
+          </div>
+
           <label class="flex items-center gap-2 text-sm">
             <input id="epPublished" type="checkbox" ${ep.isPublished?"checked":""}/> Published
           </label>
@@ -1047,9 +1196,11 @@ function saveEpisode(seriesId, seasonIndex, epIndex){
 }
 
 /* =========================================================
-   LOOP CHANNEL — EDITOR
+   LOOP / USERS / SETTINGS / PUBLISH (UNCHANGED)
+   Keeping as-is for your stable frontend pipeline.
 ========================================================= */
 
+/* ====== LOOP CHANNEL (same as your file) ====== */
 function flattenAllRefs(){
   const titles = cmsState.titles.filter(t => t.type !== "series");
   const series = cmsState.titles.filter(t => t.type === "series");
@@ -1266,12 +1417,7 @@ function renderLoop(){
   `;
 }
 
-/* =========================================================
-   USERS — SUPABASE ADMIN LITE
-   ⚠️ Stores service key in localStorage.
-   Use ONLY for your private CMS.
-========================================================= */
-
+/* ====== USERS (same as your file) ====== */
 const SUPA_LS = "watchvim_supabase_admin_cfg_v1";
 let supaAdminClient = null;
 
@@ -1384,10 +1530,7 @@ function renderUsersPlaceholder(){
   `;
 }
 
-/* =========================================================
-   SETTINGS
-========================================================= */
-
+/* ====== SETTINGS (same as your file) ====== */
 function renderSettings(){
   const main = document.getElementById("main");
   const p = cmsState.payment || {};
@@ -1454,10 +1597,7 @@ function saveSettings(){
   alert("Settings saved.");
 }
 
-/* =========================================================
-   PUBLISH
-========================================================= */
-
+/* ====== PUBLISH (same as your file) ====== */
 function renderPublish(){
   const main = document.getElementById("main");
   const last = cmsState.lastPublished;
