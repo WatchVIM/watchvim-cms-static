@@ -1,0 +1,5 @@
+{
+  "SUPABASE_URL": "https://xxxx.supabase.co",
+  "SUPABASE_ANON_KEY": "YOUR_ANON_PUBLIC_KEY",
+  "CMS_API_BASE": "/api/admin"
+}
