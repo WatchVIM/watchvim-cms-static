@@ -99,14 +99,13 @@
 
 <script>
 /* =========================================================
-   WATCHVIM CMS (single-file SPA) — v11 + Featured toggle
+   WATCHVIM CMS (single-file SPA) — v11
    - Blob URLs only (no direct uploads)
    - Mux Asset IDs + Playback IDs
    - Latest Users + Subscription Admin (Supabase + PayPal)
    - Tabs: Dashboard, Content, Users, Loop Channel, Advertising, Settings, Publish
    - Publish key sanitizer fixes "pathname cannot contain //"
    - Series monetization defaults + episode inheritance
-   - NEW: isFeatured flag + UI for hero carousel
 ========================================================= */
 
 /* ========= DEBUG ========= */
@@ -427,7 +426,6 @@ function renderDashboard(){
   const analytics = cmsState.analytics || defaultState().analytics;
   const adsCount = (cmsState.advertising?.globalAds||[]).length;
   const vastCount = (cmsState.advertising?.vastTags||[]).length;
-  const featuredCount = cmsState.titles.filter(t=>t.isFeatured && t.isPublished).length;
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -439,12 +437,11 @@ function renderDashboard(){
       </div>
     </div>
 
-    <div class="grid grid-cols-5 gap-3">
+    <div class="grid grid-cols-4 gap-3">
       <div class="card">${h("Total Titles", total)}</div>
       <div class="card">${h("Published", published)}</div>
       <div class="card">${h("Series", seriesCount)}</div>
       <div class="card">${h("Shorts", shortsCount)}</div>
-      <div class="card">${h("Featured Heroes", featuredCount)}</div>
     </div>
 
     <div class="grid grid-cols-4 gap-3">
@@ -529,7 +526,7 @@ function renderContentHome(filter="all"){
           const isSeries = t.type==="series";
           return `
             <div class="card cursor-pointer" onclick="navTo('${isSeries ? "seriesEdit" : "titleEdit"}:${t.id}')">
-              <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
+              <div class="aspect-[2/3] rounded-xl overflow-hidden bg.white/5 border border-white/10">
                 <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
               </div>
               <div class="mt-2 font-semibold line-clamp-2">
@@ -540,7 +537,6 @@ function renderContentHome(filter="all"){
                 ${isSeries ? `<span class="pill">${(t.seasons||[]).length} seasons</span>` : ``}
                 ${t.imdbRating ? `<span class="pill">IMDb ${t.imdbRating}</span>` : ``}
                 ${t.isPublished?`<span class="pill bg-green-600/20">Published</span>`:""}
-                ${t.isFeatured?`<span class="pill bg-yellow-500/20">Featured</span>`:""}
               </div>
             </div>
           `;
@@ -597,7 +593,6 @@ function createTitle(presetType="films"){
     contentPlaybackId: "",
 
     isPublished: false,
-    isFeatured: false,           // NEW: Featured toggle for hero carousel
     monetization: baseMonetization(),
     appImages: {
       mobileHeroUrl:"",
@@ -640,7 +635,6 @@ function createSeries(){
     contentPlaybackId: "",
 
     isPublished: false,
-    isFeatured: false,            // NEW: Featured toggle for hero carousel
     monetization: baseMonetization(),     // SERIES-LEVEL MONETIZATION DEFAULTS
     appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" },
     seasons: []
@@ -834,15 +828,9 @@ function renderTitleEdit(id){
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center gap-4 pt-2">
-            <label class="flex items-center gap-2 text-sm">
-              <input id="isPublished" type="checkbox" ${t.isPublished?"checked":""}/>
-              Published
-            </label>
-            <label class="flex items-center gap-2 text-sm">
-              <input id="isFeatured" type="checkbox" ${t.isFeatured?"checked":""}/>
-              Feature on Hero Carousel
-            </label>
+          <div class="flex items-center gap-2">
+            <input id="isPublished" type="checkbox" ${t.isPublished?"checked":""}/>
+            <label for="isPublished" class="text-sm">Published</label>
           </div>
         </div>
 
@@ -873,7 +861,7 @@ function renderTitleEdit(id){
               <input id="buyPrice" class="input" value="${t.monetization?.tvod?.buyPrice||""}"/>
             </div>
           </div>
-          <div class="text-xs text-white/60">Enable any combo of SVOD + AVOD + TVOD.</div>
+          <div class="text-xs text.white/60">Enable any combo of SVOD + AVOD + TVOD.</div>
         </div>
 
         <div class="card space-y-3">
@@ -957,7 +945,6 @@ function saveTitle(id){
   t.trailerPlaybackId = document.getElementById("trailerPlaybackId").value.trim();
   t.contentPlaybackId = document.getElementById("contentPlaybackId").value.trim();
   t.isPublished = document.getElementById("isPublished").checked;
-  t.isFeatured = document.getElementById("isFeatured")?.checked || false;
 
   t.monetization = t.monetization || baseMonetization();
   t.monetization.svod = document.getElementById("svod").checked;
@@ -1136,16 +1123,10 @@ function renderSeriesEdit(seriesId){
             </div>
           </div>
 
-          <div class="flex flex-wrap items-center gap-4 pt-2">
-            <label class="flex items-center gap-2 text-sm">
-              <input id="seriesPublished" type="checkbox" ${s.isPublished?"checked":""}/>
-              Published
-            </label>
-            <label class="flex items-center gap-2 text-sm">
-              <input id="seriesFeatured" type="checkbox" ${s.isFeatured?"checked":""}/>
-              Feature on Hero Carousel
-            </label>
-          </div>
+          <label class="flex items-center gap-2 text-sm">
+            <input id="seriesPublished" type="checkbox" ${s.isPublished?"checked":""}/>
+            Published
+          </label>
         </div>
 
         <!-- SERIES MONETIZATION BLOCK -->
@@ -1283,7 +1264,6 @@ function saveSeries(seriesId){
   s.contentPlaybackId = document.getElementById("seriesContentPlaybackId").value.trim();
 
   s.isPublished = document.getElementById("seriesPublished").checked;
-  s.isFeatured = document.getElementById("seriesFeatured")?.checked || false;
 
   // ensure monetization is saved from the block
   saveSeriesMonetization(seriesId);
@@ -1931,7 +1911,7 @@ function renderAdvertising(){
                 <div class="font-semibold">${ad.name||"Unnamed Ad"}</div>
                 <div class="text-xs text-white/60">
                   ${ad.durationSec||15}s
-                  ${ad.skippable ? \`• skippable after ${ad.skipAfterSec||5}s\` : "• not skippable"}
+                  ${ad.skippable ? `• skippable after ${ad.skipAfterSec||5}s` : "• not skippable"}
                 </div>
                 ${ad.mediaUrl ? `<div class="text-xs break-all">${ad.mediaUrl}</div>` : ""}
                 ${ad.muxPlaybackId ? `<div class="text-xs break-all muted">mux:${ad.muxPlaybackId}</div>` : ""}
@@ -1980,6 +1960,7 @@ function renderAdvertising(){
 
 /* =========================================================
    USERS (Supabase Admin) — UPDATED
+   - Fetch users + subscriptions + plans
 ========================================================= */
 
 const SUPA_LS = "watchvim_supabase_admin_cfg_v1";
