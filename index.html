@@ -99,13 +99,15 @@
 
 <script>
 /* =========================================================
-   WATCHVIM CMS (single-file SPA) — v11
+   WATCHVIM CMS (single-file SPA) — v12
    - Blob URLs only (no direct uploads)
    - Mux Asset IDs + Playback IDs
    - Latest Users + Subscription Admin (Supabase + PayPal)
    - Tabs: Dashboard, Content, Users, Loop Channel, Advertising, Settings, Publish
    - Publish key sanitizer fixes "pathname cannot contain //"
    - Series monetization defaults + episode inheritance
+   - NEW: isFeatured flag + Feature on Home/Hero toggle
+   - NEW: ignore generic cross-origin "Script error." noise
 ========================================================= */
 
 /* ========= DEBUG ========= */
@@ -121,16 +123,26 @@ function logDebug(msg){
 function toggleDebug(){
   debugPane.style.display = (debugPane.style.display==="none"||!debugPane.style.display) ? "block" : "none";
 }
-window.addEventListener("error", (e)=> logDebug("JS Error: " + e.message));
-window.addEventListener("unhandledrejection", (e)=> logDebug("Promise Rejection: " + (e.reason?.message||e.reason)));
+
+// Ignore generic cross-origin "Script error." from third-party scripts
+window.addEventListener("error", (e)=>{
+  if(e.message === "Script error." && !e.filename){
+    return; // ignore noisy, non-actionable errors
+  }
+  const extra = e.filename ? ` (${e.filename}:${e.lineno||""}:${e.colno||""})` : "";
+  logDebug("JS Error: " + e.message + extra);
+});
+window.addEventListener("unhandledrejection", (e)=> {
+  logDebug("Promise Rejection: " + (e.reason?.message||e.reason));
+});
 
 /* =====================
    STATE + STORAGE
 ===================== */
 
 const LS_KEYS = {
-  CMS_STATE: "watchvim_cms_state_v11",
-  NAV_STACK: "watchvim_nav_stack_v11",
+  CMS_STATE: "watchvim_cms_state_v12",
+  NAV_STACK: "watchvim_nav_stack_v12",
 };
 
 function defaultState(){
@@ -526,7 +538,7 @@ function renderContentHome(filter="all"){
           const isSeries = t.type==="series";
           return `
             <div class="card cursor-pointer" onclick="navTo('${isSeries ? "seriesEdit" : "titleEdit"}:${t.id}')">
-              <div class="aspect-[2/3] rounded-xl overflow-hidden bg.white/5 border border-white/10">
+              <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
                 <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
               </div>
               <div class="mt-2 font-semibold line-clamp-2">
@@ -536,7 +548,8 @@ function renderContentHome(filter="all"){
                 <span class="pill">${typeBadge(t.type)}</span>
                 ${isSeries ? `<span class="pill">${(t.seasons||[]).length} seasons</span>` : ``}
                 ${t.imdbRating ? `<span class="pill">IMDb ${t.imdbRating}</span>` : ``}
-                ${t.isPublished?`<span class="pill bg-green-600/20">Published</span>`:""}
+                ${t.isPublished ? `<span class="pill bg-green-600/20">Published</span>` : ""}
+                ${t.isFeatured ? `<span class="pill bg-yellow-500/20">Featured</span>` : ""}
               </div>
             </div>
           `;
@@ -593,6 +606,7 @@ function createTitle(presetType="films"){
     contentPlaybackId: "",
 
     isPublished: false,
+    isFeatured: false,                // NEW: feature flag for hero/home
     monetization: baseMonetization(),
     appImages: {
       mobileHeroUrl:"",
@@ -635,6 +649,7 @@ function createSeries(){
     contentPlaybackId: "",
 
     isPublished: false,
+    isFeatured: false,                // NEW: feature flag for series
     monetization: baseMonetization(),     // SERIES-LEVEL MONETIZATION DEFAULTS
     appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" },
     seasons: []
@@ -653,6 +668,9 @@ function renderTitleEdit(id){
   const main = document.getElementById("main");
   const t = getTitleById(id);
   if(!t) return navTo("content");
+
+  // Backfill isFeatured for older state objects
+  if(typeof t.isFeatured === "undefined") t.isFeatured = false;
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -828,9 +846,15 @@ function renderTitleEdit(id){
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
-            <input id="isPublished" type="checkbox" ${t.isPublished?"checked":""}/>
-            <label for="isPublished" class="text-sm">Published</label>
+          <div class="flex flex-wrap items-center gap-4 pt-2">
+            <label class="flex items-center gap-2 text-sm">
+              <input id="isPublished" type="checkbox" ${t.isPublished?"checked":""}/>
+              Published
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input id="isFeatured" type="checkbox" ${t.isFeatured?"checked":""}/>
+              Feature on Home / Hero
+            </label>
           </div>
         </div>
 
@@ -861,7 +885,7 @@ function renderTitleEdit(id){
               <input id="buyPrice" class="input" value="${t.monetization?.tvod?.buyPrice||""}"/>
             </div>
           </div>
-          <div class="text-xs text.white/60">Enable any combo of SVOD + AVOD + TVOD.</div>
+          <div class="text-xs text-white/60">Enable any combo of SVOD + AVOD + TVOD.</div>
         </div>
 
         <div class="card space-y-3">
@@ -880,7 +904,8 @@ function renderTitleEdit(id){
 
 function renderAppImageUrlField(id, field, label, aspect, previewId){
   const t = getTitleById(id);
-  const val = t.appImages?.[field] || "";
+  t.appImages = t.appImages || {};
+  const val = t.appImages[field] || "";
   return `
     <div class="space-y-2">
       <div class="label">${label}</div>
@@ -914,6 +939,7 @@ function toggleTVODFields(){
 
 function saveTitle(id){
   const t = getTitleById(id);
+  if(!t) return;
 
   t.type = document.getElementById("type").value;
   t.title = document.getElementById("title").value.trim();
@@ -944,7 +970,9 @@ function saveTitle(id){
   // Playback IDs for preview
   t.trailerPlaybackId = document.getElementById("trailerPlaybackId").value.trim();
   t.contentPlaybackId = document.getElementById("contentPlaybackId").value.trim();
+
   t.isPublished = document.getElementById("isPublished").checked;
+  t.isFeatured = document.getElementById("isFeatured")?.checked || false;
 
   t.monetization = t.monetization || baseMonetization();
   t.monetization.svod = document.getElementById("svod").checked;
@@ -973,8 +1001,8 @@ function renderSeriesEdit(seriesId){
   const s = getTitleById(seriesId);
   if(!s) return navTo("content:series");
 
-  // ensure monetization object exists
   s.monetization = s.monetization || baseMonetization();
+  if(typeof s.isFeatured === "undefined") s.isFeatured = false;
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1123,10 +1151,16 @@ function renderSeriesEdit(seriesId){
             </div>
           </div>
 
-          <label class="flex items-center gap-2 text-sm">
-            <input id="seriesPublished" type="checkbox" ${s.isPublished?"checked":""}/>
-            Published
-          </label>
+          <div class="flex flex-wrap items-center gap-4 pt-2">
+            <label class="flex items-center gap-2 text-sm">
+              <input id="seriesPublished" type="checkbox" ${s.isPublished?"checked":""}/>
+              Published
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input id="seriesFeatured" type="checkbox" ${s.isFeatured?"checked":""}/>
+              Feature on Home / Hero
+            </label>
+          </div>
         </div>
 
         <!-- SERIES MONETIZATION BLOCK -->
@@ -1238,6 +1272,7 @@ function saveSeriesMonetization(seriesId){
 
 function saveSeries(seriesId){
   const s = getTitleById(seriesId);
+  if(!s) return;
 
   s.title = document.getElementById("seriesTitle").value.trim();
   s.synopsis = document.getElementById("seriesSynopsis").value.trim();
@@ -1264,6 +1299,7 @@ function saveSeries(seriesId){
   s.contentPlaybackId = document.getElementById("seriesContentPlaybackId").value.trim();
 
   s.isPublished = document.getElementById("seriesPublished").checked;
+  s.isFeatured = document.getElementById("seriesFeatured")?.checked || false;
 
   // ensure monetization is saved from the block
   saveSeriesMonetization(seriesId);
@@ -1391,7 +1427,6 @@ function addEpisode(seriesId, seasonIndex){
   const season = s.seasons[seasonIndex];
   const nextNum = (season.episodes||[]).length + 1;
 
-  // EPISODE INHERITS SERIES MONETIZATION BY DEFAULT
   const seriesMon = s.monetization || baseMonetization();
 
   season.episodes.push({
@@ -1408,7 +1443,7 @@ function addEpisode(seriesId, seasonIndex){
     contentPlaybackId: "",
 
     isPublished: false,
-    monetization: JSON.parse(JSON.stringify(seriesMon)), // copy default series monetization
+    monetization: JSON.parse(JSON.stringify(seriesMon)),
     appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" }
   });
 
@@ -1516,9 +1551,6 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
             <input id="epPublished" type="checkbox" ${ep.isPublished?"checked":""}/> Published
           </label>
         </div>
-
-        <!-- Future: per-episode monetization override could go here if needed -->
-
       </div>
     </div>
   `;
@@ -1959,8 +1991,7 @@ function renderAdvertising(){
 }
 
 /* =========================================================
-   USERS (Supabase Admin) — UPDATED
-   - Fetch users + subscriptions + plans
+   USERS (Supabase Admin)
 ========================================================= */
 
 const SUPA_LS = "watchvim_supabase_admin_cfg_v1";
@@ -2000,7 +2031,6 @@ async function initSupaAdmin(){
   return supaAdminClient;
 }
 
-// Back-compat button
 async function fetchUsers(){
   return fetchUsersAndSubs();
 }
@@ -2009,14 +2039,12 @@ async function fetchUsersAndSubs(){
   try{
     if(!supaAdminClient) await initSupaAdmin();
 
-    // 1) Users (auth)
     const uRes = await supaAdminClient.auth.admin.listUsers({
       page: 1, perPage: 1000
     });
     if(uRes.error) throw uRes.error;
     const users = uRes.data?.users || uRes.users || [];
 
-    // 2) Subscriptions
     const { data: subs, error: sErr } = await supaAdminClient
       .from("user_subscriptions")
       .select("user_id, plan_id, status, paypal_subscription_id, started_at, current_period_end, cancel_at_period_end, created_at, updated_at")
@@ -2024,7 +2052,6 @@ async function fetchUsersAndSubs(){
       .limit(2000);
     if(sErr) throw sErr;
 
-    // 3) Plans
     const { data: plans, error: pErr } = await supaAdminClient
       .from("subscription_plans")
       .select("id, name, price, currency, interval, is_active");
@@ -2482,9 +2509,9 @@ function renderPublish(){
 function sanitizePathKey(key){
   return (key||"")
     .trim()
-    .replace(/^\/+/, "")      // no leading slash
-    .replace(/\/{2,}/g, "/") // collapse double slashes
-    .replace(/\s+/g, "-");   // spaces to dashes
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/")
+    .replace(/\s+/g, "-");
 }
 
 function onlyPublishedPayload(){
