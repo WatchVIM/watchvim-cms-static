@@ -99,13 +99,13 @@
 
 <script>
 /* =========================================================
-   WATCHVIM CMS (single-file SPA) — v10
+   WATCHVIM CMS (single-file SPA) — v11
+   - Blob URLs only (no direct uploads)
+   - Mux Asset IDs + Playback IDs
    - Latest Users + Subscription Admin (Supabase + PayPal)
-   - IMDb + Credits (Director/Cast/Studio) restored
    - Tabs: Dashboard, Content, Users, Loop Channel, Advertising, Settings, Publish
-   - Uploads disabled: paste Blob URLs + Mux IDs
    - Publish key sanitizer fixes "pathname cannot contain //"
-   - UPDATED: Series monetization defaults + episode inheritance
+   - Series monetization defaults + episode inheritance
 ========================================================= */
 
 /* ========= DEBUG ========= */
@@ -129,8 +129,8 @@ window.addEventListener("unhandledrejection", (e)=> logDebug("Promise Rejection:
 ===================== */
 
 const LS_KEYS = {
-  CMS_STATE: "watchvim_cms_state_v9",
-  NAV_STACK: "watchvim_nav_stack_v9",
+  CMS_STATE: "watchvim_cms_state_v11",
+  NAV_STACK: "watchvim_nav_stack_v11",
 };
 
 function defaultState(){
@@ -215,14 +215,32 @@ function loadState(){
   try {
     const parsed = JSON.parse(raw);
     const merged = { ...defaultState(), ...parsed };
+
     merged.loopChannel = { ...defaultState().loopChannel, ...(parsed.loopChannel||{}) };
     merged.advertising = { ...defaultState().advertising, ...(parsed.advertising||{}) };
     merged.settings = { ...defaultState().settings, ...(parsed.settings||{}) };
-    merged.settings.monetizationGlobal = { ...defaultState().settings.monetizationGlobal, ...(parsed.settings?.monetizationGlobal||{}) };
-    merged.settings.payment = { ...defaultState().settings.payment, ...(parsed.settings?.payment||{}) };
-    merged.settings.seo = { ...defaultState().settings.seo, ...(parsed.settings?.seo||{}) };
-    merged.settings.emails = { ...defaultState().settings.emails, ...(parsed.settings?.emails||{}) };
-    merged.settings.publishing = { ...defaultState().settings.publishing, ...(parsed.settings?.publishing||{}) };
+
+    merged.settings.monetizationGlobal = {
+      ...defaultState().settings.monetizationGlobal,
+      ...(parsed.settings?.monetizationGlobal||{})
+    };
+    merged.settings.payment = {
+      ...defaultState().settings.payment,
+      ...(parsed.settings?.payment||{})
+    };
+    merged.settings.seo = {
+      ...defaultState().settings.seo,
+      ...(parsed.settings?.seo||{})
+    };
+    merged.settings.emails = {
+      ...defaultState().settings.emails,
+      ...(parsed.settings?.emails||{})
+    };
+    merged.settings.publishing = {
+      ...defaultState().settings.publishing,
+      ...(parsed.settings?.publishing||{})
+    };
+
     merged.analytics = { ...defaultState().analytics, ...(parsed.analytics||{}) };
     return merged;
   } catch {
@@ -511,7 +529,9 @@ function renderContentHome(filter="all"){
               <div class="aspect-[2/3] rounded-xl overflow-hidden bg-white/5 border border-white/10">
                 <img src="${t.posterUrl||''}" class="w-full h-full object-cover"/>
               </div>
-              <div class="mt-2 font-semibold line-clamp-2">${t.title|| (isSeries ? "Untitled Series" : "Untitled")}</div>
+              <div class="mt-2 font-semibold line-clamp-2">
+                ${t.title|| (isSeries ? "Untitled Series" : "Untitled")}
+              </div>
               <div class="text-xs text-white/60 flex gap-1 flex-wrap items-center">
                 <span class="pill">${typeBadge(t.type)}</span>
                 ${isSeries ? `<span class="pill">${(t.seasons||[]).length} seasons</span>` : ``}
@@ -708,13 +728,29 @@ function renderTitleEdit(id){
             </div>
           </div>
 
-          <div><div class="label">Title</div><input id="title" class="input" value="${t.title||""}"/></div>
-          <div><div class="label">Synopsis</div><textarea id="synopsis" class="input" rows="4">${t.synopsis||""}</textarea></div>
+          <div>
+            <div class="label">Title</div>
+            <input id="title" class="input" value="${t.title||""}"/>
+          </div>
+
+          <div>
+            <div class="label">Synopsis</div>
+            <textarea id="synopsis" class="input" rows="4">${t.synopsis||""}</textarea>
+          </div>
 
           <div class="grid grid-cols-3 gap-3">
-            <div><div class="label">Runtime (mins)</div><input id="runtimeMins" class="input" value="${t.runtimeMins||""}"/></div>
-            <div><div class="label">Language</div><input id="language" class="input" value="${t.language||""}"/></div>
-            <div><div class="label">Rating (MPAA/TV)</div><input id="rating" class="input" value="${t.rating||""}"/></div>
+            <div>
+              <div class="label">Runtime (mins)</div>
+              <input id="runtimeMins" class="input" value="${t.runtimeMins||""}"/>
+            </div>
+            <div>
+              <div class="label">Language</div>
+              <input id="language" class="input" value="${t.language||""}"/>
+            </div>
+            <div>
+              <div class="label">Rating (MPAA/TV)</div>
+              <input id="rating" class="input" value="${t.rating||""}"/>
+            </div>
           </div>
 
           <!-- Credits -->
@@ -751,7 +787,10 @@ function renderTitleEdit(id){
             <input id="contentAdvisory" class="input" value="${t.contentAdvisory||""}" placeholder="violence, nudity, language..."/>
           </div>
 
-          <div><div class="label">Genres (comma separated)</div><input id="genre" class="input" value="${tagify(t.genre)}"/></div>
+          <div>
+            <div class="label">Genres (comma separated)</div>
+            <input id="genre" class="input" value="${tagify(t.genre)}"/>
+          </div>
 
           <!-- Mux IDs -->
           <div class="grid grid-cols-2 gap-3">
@@ -798,14 +837,29 @@ function renderTitleEdit(id){
         <div class="card space-y-3">
           <div class="font-semibold">Monetization (multiple allowed)</div>
           <div class="flex flex-wrap gap-4 text-sm">
-            <label class="flex items-center gap-2"><input id="svod" type="checkbox" ${t.monetization?.svod?"checked":""}/> SVOD</label>
-            <label class="flex items-center gap-2"><input id="avod" type="checkbox" ${t.monetization?.avod?"checked":""}/> AVOD</label>
-            <label class="flex items-center gap-2"><input id="tvodEnabled" type="checkbox" ${t.monetization?.tvod?.enabled?"checked":""} onchange="toggleTVODFields()"/> TVOD</label>
+            <label class="flex items-center gap-2">
+              <input id="svod" type="checkbox" ${t.monetization?.svod?"checked":""}/> SVOD
+            </label>
+            <label class="flex items-center gap-2">
+              <input id="avod" type="checkbox" ${t.monetization?.avod?"checked":""}/> AVOD
+            </label>
+            <label class="flex items-center gap-2">
+              <input id="tvodEnabled" type="checkbox" ${t.monetization?.tvod?.enabled?"checked":""} onchange="toggleTVODFields()"/> TVOD
+            </label>
           </div>
           <div id="tvodFields" class="${t.monetization?.tvod?.enabled?'':'hidden'} grid grid-cols-3 gap-3">
-            <div><div class="label">Rental Price ($)</div><input id="rentalPrice" class="input" value="${t.monetization?.tvod?.rentalPrice||""}"/></div>
-            <div><div class="label">Rental Window (hrs)</div><input id="rentalWindowHours" class="input" value="${t.monetization?.tvod?.rentalWindowHours||48}"/></div>
-            <div><div class="label">Buy Price ($)</div><input id="buyPrice" class="input" value="${t.monetization?.tvod?.buyPrice||""}"/></div>
+            <div>
+              <div class="label">Rental Price ($)</div>
+              <input id="rentalPrice" class="input" value="${t.monetization?.tvod?.rentalPrice||""}"/>
+            </div>
+            <div>
+              <div class="label">Rental Window (hrs)</div>
+              <input id="rentalWindowHours" class="input" value="${t.monetization?.tvod?.rentalWindowHours||48}"/>
+            </div>
+            <div>
+              <div class="label">Buy Price ($)</div>
+              <input id="buyPrice" class="input" value="${t.monetization?.tvod?.buyPrice||""}"/>
+            </div>
           </div>
           <div class="text-xs text-white/60">Enable any combo of SVOD + AVOD + TVOD.</div>
         </div>
@@ -1211,7 +1265,7 @@ function saveSeries(seriesId){
 
   s.isPublished = document.getElementById("seriesPublished").checked;
 
-  // make sure monetization is saved from the block
+  // ensure monetization is saved from the block
   saveSeriesMonetization(seriesId);
 
   saveState();
@@ -1403,12 +1457,25 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
       <div class="space-y-4">
         <div class="card space-y-3">
           <div class="grid grid-cols-2 gap-3">
-            <div><div class="label">Episode #</div><input id="epNumber" class="input" value="${ep.episodeNumber}"/></div>
-            <div><div class="label">Runtime (mins)</div><input id="epRuntime" class="input" value="${ep.runtimeMins||""}"/></div>
+            <div>
+              <div class="label">Episode #</div>
+              <input id="epNumber" class="input" value="${ep.episodeNumber}"/>
+            </div>
+            <div>
+              <div class="label">Runtime (mins)</div>
+              <input id="epRuntime" class="input" value="${ep.runtimeMins||""}"/>
+            </div>
           </div>
 
-          <div><div class="label">Episode Title</div><input id="epTitle" class="input" value="${ep.title||""}"/></div>
-          <div><div class="label">Synopsis</div><textarea id="epSynopsis" class="input" rows="3">${ep.synopsis||""}</textarea></div>
+          <div>
+            <div class="label">Episode Title</div>
+            <input id="epTitle" class="input" value="${ep.title||""}"/>
+          </div>
+
+          <div>
+            <div class="label">Synopsis</div>
+            <textarea id="epSynopsis" class="input" rows="3">${ep.synopsis||""}</textarea>
+          </div>
 
           <div class="grid grid-cols-2 gap-3">
             <div>
@@ -1420,8 +1487,14 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
               <input id="epContentAssetId" class="input" value="${ep.contentAssetId||""}" placeholder="asset_id..." />
             </div>
 
-            <div><div class="label">Trailer Playback ID (preview)</div><input id="epTrailer" class="input" value="${ep.trailerPlaybackId||""}"/></div>
-            <div><div class="label">Content Playback ID (preview)</div><input id="epContent" class="input" value="${ep.contentPlaybackId||""}"/></div>
+            <div>
+              <div class="label">Trailer Playback ID (preview)</div>
+              <input id="epTrailer" class="input" value="${ep.trailerPlaybackId||""}"/>
+            </div>
+            <div>
+              <div class="label">Content Playback ID (preview)</div>
+              <input id="epContent" class="input" value="${ep.contentPlaybackId||""}"/>
+            </div>
           </div>
 
           <div class="pt-2">
