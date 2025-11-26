@@ -105,6 +105,7 @@
    - Tabs: Dashboard, Content, Users, Loop Channel, Advertising, Settings, Publish
    - Uploads disabled: paste Blob URLs + Mux IDs
    - Publish key sanitizer fixes "pathname cannot contain //"
+   - UPDATED: Series monetization defaults + episode inheritance
 ========================================================= */
 
 /* ========= DEBUG ========= */
@@ -534,6 +535,14 @@ function createContent(type){
    CREATE TITLE / SERIES
 ========================================================= */
 
+function baseMonetization(){
+  return {
+    svod: true,
+    avod: false,
+    tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
+  };
+}
+
 function createTitle(presetType="films"){
   const t = {
     id: uid("title"),
@@ -564,11 +573,7 @@ function createTitle(presetType="films"){
     contentPlaybackId: "",
 
     isPublished: false,
-    monetization: {
-      svod: true,
-      avod: false,
-      tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
-    },
+    monetization: baseMonetization(),
     appImages: {
       mobileHeroUrl:"",
       mobilePosterUrl:"",
@@ -610,11 +615,7 @@ function createSeries(){
     contentPlaybackId: "",
 
     isPublished: false,
-    monetization: {
-      svod: true,
-      avod: false,
-      tvod: { enabled:false, rentalPrice:"", rentalWindowHours:48, buyPrice:"" }
-    },
+    monetization: baseMonetization(),     // SERIES-LEVEL MONETIZATION DEFAULTS
     appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" },
     seasons: []
   };
@@ -891,7 +892,7 @@ function saveTitle(id){
   t.contentPlaybackId = document.getElementById("contentPlaybackId").value.trim();
   t.isPublished = document.getElementById("isPublished").checked;
 
-  t.monetization = t.monetization || {};
+  t.monetization = t.monetization || baseMonetization();
   t.monetization.svod = document.getElementById("svod").checked;
   t.monetization.avod = document.getElementById("avod").checked;
   t.monetization.tvod = t.monetization.tvod || {};
@@ -910,13 +911,16 @@ function saveTitle(id){
 }
 
 /* =========================================================
-   SERIES / SEASONS / EPISODES (URL-only)
+   SERIES / SEASONS / EPISODES (URL-only + monetization)
 ========================================================= */
 
 function renderSeriesEdit(seriesId){
   const main = document.getElementById("main");
   const s = getTitleById(seriesId);
   if(!s) return navTo("content:series");
+
+  // ensure monetization object exists
+  s.monetization = s.monetization || baseMonetization();
 
   main.innerHTML = `
     <div class="flex items-center justify-between">
@@ -1071,6 +1075,9 @@ function renderSeriesEdit(seriesId){
           </label>
         </div>
 
+        <!-- SERIES MONETIZATION BLOCK -->
+        ${renderSeriesMonetizationBlock(seriesId)}
+
         <div class="card space-y-2">
           <div class="flex items-center justify-between">
             <div class="font-semibold">Seasons</div>
@@ -1096,6 +1103,83 @@ function renderSeriesEdit(seriesId){
       </div>
     </div>
   `;
+}
+
+function renderSeriesMonetizationBlock(seriesId){
+  const s = getTitleById(seriesId);
+  const m = s.monetization || baseMonetization();
+  return `
+    <div class="card space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold">Monetization (Series Defaults)</div>
+        <button class="btn small" onclick="saveSeriesMonetization('${seriesId}')">Save Monetization</button>
+      </div>
+      <div class="small muted">
+        These options act as the <b>default monetization</b> for all episodes in this series.
+        Individual episodes may override in the future, but apps should treat this as the master setting.
+      </div>
+      <div class="flex flex-wrap gap-4 text-sm">
+        <label class="flex items-center gap-2">
+          <input id="series_svod" type="checkbox" ${m.svod?"checked":""}/>
+          SVOD (no ads for members)
+        </label>
+        <label class="flex items-center gap-2">
+          <input id="series_avod" type="checkbox" ${m.avod?"checked":""}/>
+          AVOD (ad-supported)
+        </label>
+        <label class="flex items-center gap-2">
+          <input id="series_tvodEnabled" type="checkbox" ${m.tvod?.enabled?"checked":""} onchange="toggleSeriesTVODFields('${seriesId}')"/>
+          TVOD (rental / buy)
+        </label>
+      </div>
+      <div id="series_tvodFields" class="${m.tvod?.enabled?'':'hidden'} grid grid-cols-3 gap-3">
+        <div>
+          <div class="label">Rental Price ($)</div>
+          <input id="series_rentalPrice" class="input" value="${m.tvod?.rentalPrice||""}"/>
+        </div>
+        <div>
+          <div class="label">Rental Window (hrs)</div>
+          <input id="series_rentalWindowHours" class="input" value="${m.tvod?.rentalWindowHours||48}"/>
+        </div>
+        <div>
+          <div class="label">Buy Price ($)</div>
+          <input id="series_buyPrice" class="input" value="${m.tvod?.buyPrice||""}"/>
+        </div>
+      </div>
+      <div class="text-xs text-white/60">
+        Example: enable SVOD + AVOD so subscribers watch ad-free and free users see ads.
+        TVOD can sit on top for early access or premium bundles.
+      </div>
+    </div>
+  `;
+}
+
+function toggleSeriesTVODFields(seriesId){
+  const enabled = document.getElementById("series_tvodEnabled")?.checked;
+  const el = document.getElementById("series_tvodFields");
+  if(el) el.classList.toggle("hidden", !enabled);
+}
+
+function saveSeriesMonetization(seriesId){
+  const s = getTitleById(seriesId);
+  if(!s) return;
+
+  s.monetization = s.monetization || baseMonetization();
+  s.monetization.svod = document.getElementById("series_svod").checked;
+  s.monetization.avod = document.getElementById("series_avod").checked;
+  s.monetization.tvod = s.monetization.tvod || {};
+  s.monetization.tvod.enabled = document.getElementById("series_tvodEnabled").checked;
+  s.monetization.tvod.rentalPrice = document.getElementById("series_rentalPrice")?.value.trim() || "";
+  s.monetization.tvod.rentalWindowHours = Number(document.getElementById("series_rentalWindowHours")?.value || 48);
+  s.monetization.tvod.buyPrice = document.getElementById("series_buyPrice")?.value.trim() || "";
+
+  if(!s.monetization.svod && !s.monetization.avod && !s.monetization.tvod.enabled){
+    alert("Enable at least one monetization option for the series.");
+    return;
+  }
+
+  saveState();
+  alert("Series monetization saved.");
 }
 
 function saveSeries(seriesId){
@@ -1126,6 +1210,9 @@ function saveSeries(seriesId){
   s.contentPlaybackId = document.getElementById("seriesContentPlaybackId").value.trim();
 
   s.isPublished = document.getElementById("seriesPublished").checked;
+
+  // make sure monetization is saved from the block
+  saveSeriesMonetization(seriesId);
 
   saveState();
   alert("Series saved.");
@@ -1250,6 +1337,9 @@ function addEpisode(seriesId, seasonIndex){
   const season = s.seasons[seasonIndex];
   const nextNum = (season.episodes||[]).length + 1;
 
+  // EPISODE INHERITS SERIES MONETIZATION BY DEFAULT
+  const seriesMon = s.monetization || baseMonetization();
+
   season.episodes.push({
     id: uid("episode"),
     episodeNumber: nextNum,
@@ -1264,7 +1354,7 @@ function addEpisode(seriesId, seasonIndex){
     contentPlaybackId: "",
 
     isPublished: false,
-    monetization: JSON.parse(JSON.stringify(s.monetization)),
+    monetization: JSON.parse(JSON.stringify(seriesMon)), // copy default series monetization
     appImages: { mobileHeroUrl:"", mobilePosterUrl:"", tvHeroUrl:"", tvPosterUrl:"" }
   });
 
@@ -1353,6 +1443,9 @@ function renderEpisodeEdit(seriesId, seasonIndex, epIndex){
             <input id="epPublished" type="checkbox" ${ep.isPublished?"checked":""}/> Published
           </label>
         </div>
+
+        <!-- Future: per-episode monetization override could go here if needed -->
+
       </div>
     </div>
   `;
